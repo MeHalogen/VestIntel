@@ -8,11 +8,16 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { AlertsAPI } from "@/lib/api"
+import { usePlan } from "@/lib/use-plan"
+import { canUse, upgradeMessage } from "@/lib/entitlements"
+import { useToast } from "@/hooks/use-toast"
 
 export default function AlertsPage() {
   const qc = useQueryClient()
   const [symbol, setSymbol] = useState("RELIANCE")
   const [value, setValue] = useState("170")
+  const { plan } = usePlan()
+  const { toast } = useToast()
 
   const alertsQuery = useQuery({
     queryKey: ["alerts", "list"],
@@ -103,7 +108,20 @@ export default function AlertsPage() {
           <CardContent className="space-y-2">
             <Input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="Symbol" />
             <Input value={value} onChange={(e) => setValue(e.target.value)} placeholder="Price" />
-            <Button className="w-full gap-2" onClick={() => createMutation.mutate()}>
+            <Button
+              className="w-full gap-2"
+              onClick={() => {
+                if (!canUse(plan, "custom_alerts")) {
+                  toast({
+                    title: "Upgrade required",
+                    description: upgradeMessage("custom_alerts"),
+                    variant: "destructive",
+                  })
+                  return
+                }
+                createMutation.mutate()
+              }}
+            >
               <Plus className="w-4 h-4" />
               Add
             </Button>

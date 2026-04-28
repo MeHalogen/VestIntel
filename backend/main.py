@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.routes import stocks, markets, portfolio, insights, alerts
+from api.routes import billing
 from core.config import settings
 from workers.news_ingestion import run_forever as run_news_ingestion
 from workers.nse_ingestion import run_forever as run_nse_ingestion
@@ -27,6 +28,7 @@ app.include_router(markets.router, prefix="/api/markets", tags=["markets"])
 app.include_router(portfolio.router, prefix="/api/portfolio", tags=["portfolio"])
 app.include_router(insights.router, prefix="/api/insights", tags=["insights"])
 app.include_router(alerts.router, prefix="/api/alerts", tags=["alerts"])
+app.include_router(billing.router, prefix="/api/billing", tags=["billing"])
 
 
 @app.on_event("startup")

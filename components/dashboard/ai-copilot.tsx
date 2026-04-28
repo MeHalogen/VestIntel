@@ -8,6 +8,9 @@ import { Button } from "@/components/ui/button"
 import { Brain, Send, Sparkles } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { InsightsAPI } from "@/lib/api"
+import { usePlan } from "@/lib/use-plan"
+import { canUse, upgradeMessage } from "@/lib/entitlements"
+import { useToast } from "@/hooks/use-toast"
 
 const suggestions = [
   "Why is RELIANCE moving today?",
@@ -18,6 +21,8 @@ const suggestions = [
 
 export function AICopilot() {
   const [query, setQuery] = useState("")
+  const { plan } = usePlan()
+  const { toast } = useToast()
   const askMutation = useMutation({
     mutationFn: (q: string) => InsightsAPI.ask(q),
   })
@@ -25,6 +30,15 @@ export function AICopilot() {
   const handleAsk = () => {
     const q = query.trim()
     if (!q) return
+
+    if (!canUse(plan, "ai_copilot")) {
+      toast({
+        title: "Upgrade required",
+        description: upgradeMessage("ai_copilot"),
+        variant: "destructive",
+      })
+      return
+    }
     askMutation.mutate(q)
   }
 

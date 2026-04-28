@@ -177,6 +177,12 @@ export type CopilotResponse = {
   source: string
 }
 
+export type BillingMe = {
+  email: string
+  plan: "free" | "pro" | "pro_plus"
+  created_at?: string | null
+}
+
 export const StocksAPI = {
   quote: (symbol: string) =>
     apiRequest<Quote>(`/api/stocks/quote?symbol=${encodeURIComponent(symbol)}`),
@@ -245,4 +251,8 @@ export const InsightsAPI = {
       "/api/insights/market/brief"
     ),
   ask: (q: string) => apiRequest<CopilotResponse>(`/api/insights/query/ask?q=${encodeURIComponent(q)}`),
+}
+
+export const BillingAPI = {
+  me: () => apiRequest<BillingMe>("/api/billing/me"),
 }

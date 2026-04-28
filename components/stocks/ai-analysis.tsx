@@ -4,8 +4,31 @@ import { useQuery } from "@tanstack/react-query"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Brain, TrendingUp } from "lucide-react"
 import { StocksAPI } from "@/lib/api"
+import { usePlan } from "@/lib/use-plan"
+import { canUse, upgradeMessage } from "@/lib/entitlements"
 
 export function AIAnalysis({ symbol }: { symbol: string }) {
+  const { plan } = usePlan()
+
+  if (!canUse(plan, "ai_stock_analysis")) {
+    return (
+      <Card className="panel-glass">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Brain className="w-5 h-5 text-primary" />
+            AI Analysis
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="p-4 rounded-lg border border-border/50 bg-background/50">
+            <div className="text-sm font-semibold">Upgrade required</div>
+            <p className="text-sm text-muted-foreground mt-1">{upgradeMessage("ai_stock_analysis")}</p>
+          </div>
+        </CardContent>
+      </Card>
+    )
+  }
+
   const { data } = useQuery({
     queryKey: ["stock", "analysis", symbol],
     queryFn: () => StocksAPI.analysis(symbol),
