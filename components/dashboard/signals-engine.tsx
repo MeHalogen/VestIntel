@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Brain, TrendingUp, AlertTriangle, Target } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { StocksAPI } from "@/lib/api"
+import { DataSourceBadge } from "@/components/ui/data-source-badge"
 
 export function SignalsEngine() {
   const { data = [] } = useQuery({
@@ -12,11 +13,14 @@ export function SignalsEngine() {
     queryFn: StocksAPI.signals,
     refetchInterval: 30_000,
   })
+  // first item carries as_of / source for the whole batch
+  const meta = data[0] as { source?: string; as_of?: string } | undefined
   const signals = data.map((s) => ({
     type: s.type,
     symbol: s.symbol,
     message: s.message,
     severity: s.severity,
+    reasons: s.reasons,
     time: new Date((s.timestamp || 0) * 1000).toLocaleTimeString(),
     data: { source: s.source || "derived" },
   }))
@@ -49,6 +53,16 @@ export function SignalsEngine() {
                       </Badge>
                     </div>
                     <p className="text-sm mt-1">{signal.message}</p>
+                    {signal.reasons && signal.reasons.length > 0 && (
+                      <ul className="mt-2 space-y-1">
+                        {signal.reasons.slice(0, 3).map((r, i) => (
+                          <li key={i} className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                            <span className="mt-0.5 text-primary shrink-0">•</span>
+                            <span>{r}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
                 </div>
               </div>
@@ -67,6 +81,7 @@ export function SignalsEngine() {
             </div>
           ))}
         </div>
+        <DataSourceBadge source={meta?.source} asOf={meta?.as_of} className="mt-3" />
       </CardContent>
     </Card>
   )
