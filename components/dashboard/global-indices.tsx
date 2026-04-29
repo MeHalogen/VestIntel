@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Globe, TrendingUp, TrendingDown } from "lucide-react"
 import { MarketsAPI } from "@/lib/api"
+import { DataSourceBadge } from "@/components/ui/data-source-badge"
 
 export function GlobalIndicesMonitor() {
   const { data: indiaData } = useQuery({
@@ -55,6 +56,7 @@ export function GlobalIndicesMonitor() {
             </div>
           ))}
         </div>
+        <DataSourceBadge source={indiaData?.source} asOf={indiaData?.as_of} className="mt-3" />
       </CardContent>
     </Card>
   )

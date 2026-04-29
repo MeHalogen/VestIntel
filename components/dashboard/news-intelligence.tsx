@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Newspaper, TrendingUp, TrendingDown, Minus } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { StocksAPI } from "@/lib/api"
+import { DataSourceBadge } from "@/components/ui/data-source-badge"
 
 export function NewsIntelligence() {
   const { data = [] } = useQuery({
@@ -12,6 +13,8 @@ export function NewsIntelligence() {
     queryFn: StocksAPI.news,
     refetchInterval: 60_000,
   })
+  // as_of / source come from first item
+  const metaAsOf = data[0]?.as_of
   const news = data.map((n) => ({
     headline: n.title,
     source: n.source,
@@ -74,6 +77,7 @@ export function NewsIntelligence() {
             </div>
           ))}
         </div>
+        <DataSourceBadge source="NSE" asOf={metaAsOf} className="mt-3" />
       </CardContent>
     </Card>
   )

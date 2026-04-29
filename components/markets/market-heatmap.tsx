@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { MarketsAPI } from "@/lib/api"
+import { DataSourceBadge } from "@/components/ui/data-source-badge"
 
 export function MarketHeatmap() {
   const { data } = useQuery({
@@ -37,6 +38,7 @@ export function MarketHeatmap() {
             </div>
           ))}
         </div>
+        <DataSourceBadge source={data?.source} asOf={data?.as_of} className="mt-3" />
       </CardContent>
     </Card>
   )
