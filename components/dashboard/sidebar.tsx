@@ -2,14 +2,17 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { TrendingUp, LayoutDashboard, TrendingUpIcon, Briefcase, Bell, Brain, Settings, Target, Newspaper, Sparkles, LineChart } from "lucide-react"
+import { TrendingUp, LayoutDashboard, TrendingUpIcon, Briefcase, Bell, Brain, Settings, Target, Newspaper, Sparkles, LineChart, ShieldAlert, Zap, Search } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { name: "Markets", href: "/dashboard/markets", icon: TrendingUpIcon },
+  { name: "Market Pulse", href: "/dashboard/pulse", icon: Zap },
+  { name: "Opportunities", href: "/dashboard/opportunities", icon: Search },
   { name: "Stocks", href: "/dashboard/stocks", icon: LineChart },
   { name: "Portfolio", href: "/dashboard/portfolio", icon: Briefcase },
+  { name: "Risk Engine", href: "/dashboard/risk", icon: ShieldAlert },
   { name: "Widgets", href: "/dashboard/widgets", icon: Brain },
   { name: "Signals", href: "/dashboard/signals", icon: Target },
   { name: "News Intelligence", href: "/dashboard/news", icon: Newspaper },

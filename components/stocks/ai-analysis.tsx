@@ -9,8 +9,15 @@ import { canUse, upgradeMessage } from "@/lib/entitlements"
 
 export function AIAnalysis({ symbol }: { symbol: string }) {
   const { plan } = usePlan()
+  const allowed = canUse(plan, "ai_stock_analysis")
 
-  if (!canUse(plan, "ai_stock_analysis")) {
+  const { data } = useQuery({
+    queryKey: ["stock", "analysis", symbol],
+    queryFn: () => StocksAPI.analysis(symbol),
+    refetchInterval: 120_000,
+    enabled: allowed,
+  })
+  if (!allowed) {
     return (
       <Card className="panel-glass">
         <CardHeader>
@@ -29,11 +36,6 @@ export function AIAnalysis({ symbol }: { symbol: string }) {
     )
   }
 
-  const { data } = useQuery({
-    queryKey: ["stock", "analysis", symbol],
-    queryFn: () => StocksAPI.analysis(symbol),
-    refetchInterval: 120_000,
-  })
   const analysis = data || {
     symbol: symbol.toUpperCase(),
     summary: "Loading AI analysis...",
