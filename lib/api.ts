@@ -43,6 +43,7 @@ export type SignalItem = {
   type: string
   severity: string
   message: string
+  reasons?: string[]
   timestamp: number
   source?: string
   as_of?: string
@@ -255,4 +256,122 @@ export const InsightsAPI = {
 
 export const BillingAPI = {
   me: () => apiRequest<BillingMe>("/api/billing/me"),
+}
+
+// ─── Risk Engine ─────────────────────────────────────────────────────────────
+
+export type RiskHolding = { symbol: string; weight: number }
+
+export type RiskFactor = {
+  level: string
+  penalty: number
+  tooltip: string
+  why: string
+}
+
+export type RiskBreakdown = {
+  concentration: RiskFactor
+  sector_exposure: RiskFactor & { sector_weights: Record<string, number> }
+  volatility: RiskFactor
+}
+
+export type RiskReport = {
+  score: number
+  risk_level: "low" | "medium" | "high"
+  explanation: string
+  issues: string[]
+  suggestions: string[]
+  breakdown: RiskBreakdown
+  holdings_analyzed: Array<{ symbol: string; weight: number; sector: string }>
+}
+
+export const RiskAPI = {
+  analyze: (holdings: RiskHolding[]) =>
+    apiRequest<RiskReport>("/api/risk/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ holdings }),
+    }),
+}
+
+// ─── Market Pulse ─────────────────────────────────────────────────────────────
+
+export type PulseStockCard = {
+  symbol: string
+  name: string
+  price: number
+  change: number
+  change_percent: number
+  sector: string
+  volume: number
+  intensity: string
+}
+
+export type PulseSector = {
+  sector: string
+  performance: number
+  direction: string
+  intensity: string
+  count: number
+}
+
+export type MarketPulse = {
+  as_of: string | null
+  source: string
+  market_direction: "bullish" | "neutral" | "bearish"
+  market_intensity: string
+  narrative: string
+  summary: string
+  indices: {
+    nifty: { name: string; value: number; change_percent: number; direction: string }
+    banknifty: { name: string; value: number; change_percent: number; direction: string }
+  }
+  top_gainer: PulseStockCard | null
+  top_loser: PulseStockCard | null
+  notable_movers: PulseStockCard[]
+  breadth: {
+    advancing: number
+    declining: number
+    unchanged: number
+    total: number
+    advance_decline_ratio: number
+  }
+  sector_trend: string
+  sectors: PulseSector[]
+  strongest_sector: PulseSector | null
+  weakest_sector: PulseSector | null
+}
+
+export const PulseAPI = {
+  get: () => apiRequest<MarketPulse>("/api/pulse/"),
+}
+
+// ─── Opportunity Finder ───────────────────────────────────────────────────────
+
+export type OpportunityType = "momentum" | "dip" | "volume_breakout" | "consolidation"
+
+export type Opportunity = {
+  symbol: string
+  name: string
+  price: number
+  change_percent: number
+  sector: string
+  type: OpportunityType
+  reason: string
+  confidence: "high" | "medium" | "low"
+}
+
+export type OpportunityReport = {
+  opportunities: Opportunity[]
+  summary: Record<OpportunityType | "total", number>
+  as_of: string | null
+  source: string
+  note?: string
+}
+
+export const OpportunityAPI = {
+  get: (types?: OpportunityType[]) => {
+    const qs = types?.length ? `?types=${types.join("&types=")}` : ""
+    return apiRequest<OpportunityReport>(`/api/opportunities/${qs}`)
+  },
 }
