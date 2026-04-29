@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     FINNHUB_API_KEY: str = ""
     TWELVEDATA_API_KEY: str = ""
     NEWS_API_KEY: str = ""
+    OPENAI_API_KEY: str = ""
 
     # Market data ingestion
     # Predefined watchlist to keep warm in cache & store in DB

@@ -14,6 +14,7 @@ class StockQuote(BaseModel):
     change: Optional[float] = None
     currency: Optional[str] = None
     source: Optional[str] = None
+    as_of: Optional[str] = None
     market_cap: Optional[float] = None
     sector: Optional[str] = None
 
