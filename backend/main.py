@@ -2,9 +2,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.routes import stocks, markets, portfolio, insights, alerts
 from api.routes import billing
+from api.routes import risk
+from api.routes import pulse
+from api.routes import opportunities
 from core.config import settings
+from core.database import engine
+from models.models import Base
 from workers.news_ingestion import run_forever as run_news_ingestion
-from workers.nse_ingestion import run_forever as run_nse_ingestion
 import asyncio
 
 app = FastAPI(
@@ -29,14 +33,23 @@ app.include_router(portfolio.router, prefix="/api/portfolio", tags=["portfolio"]
 app.include_router(insights.router, prefix="/api/insights", tags=["insights"])
 app.include_router(alerts.router, prefix="/api/alerts", tags=["alerts"])
 app.include_router(billing.router, prefix="/api/billing", tags=["billing"])
+app.include_router(risk.router, prefix="/api/risk", tags=["risk"])
+app.include_router(pulse.router, prefix="/api/pulse", tags=["pulse"])
+app.include_router(opportunities.router, prefix="/api/opportunities", tags=["opportunities"])
 
 
 @app.on_event("startup")
 async def startup_event():
-    # Background ingestion: NSE + news (user traffic reads cache/DB only).
+    # Create all DB tables (idempotent — safe to run on every start).
+    Base.metadata.create_all(bind=engine)
+    # Background news ingestion worker (doesn't touch NSE).
     if not settings.DISABLE_WORKERS:
         asyncio.create_task(run_news_ingestion())
-        asyncio.create_task(run_nse_ingestion())
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    pass
 
 @app.get("/")
 async def root():

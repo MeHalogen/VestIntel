@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Tuple
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 
 from core.cache import CacheService
@@ -11,12 +12,18 @@ from core.config import settings
 from core.database import SessionLocal
 from models.models import StockPrice
 from services.market_data import MarketDataService
-from workers.nse_ingestion import HEATMAP_CACHE_KEY
 from api.deps.auth import require_user
-from fastapi import Depends
+
+logger = logging.getLogger("vestintel.markets")
 
 router = APIRouter()
 market_data_service = MarketDataService()
+
+# Redis keys written by nse_worker.py — this file only READS them
+_KEY_INDIA_OVERVIEW = "nse:india_overview"
+_KEY_NIFTY50        = "nse:nifty50"
+_KEY_ALL_INDICES    = "nse:allindices"
+_KEY_HEATMAP        = "nse:heatmap"
 
 GLOBAL_INDICES: List[Tuple[str, str, str]] = [
     ("^GSPC", "S&P 500", "US"),
@@ -88,13 +95,22 @@ async def get_global_markets():
 
 
 @router.get("/india")
-async def get_india_markets():
-    cache_key = HEATMAP_CACHE_KEY
-    cached = await CacheService.get(cache_key)
+async def get_india_markets(
+    _: str = Depends(require_user),
+):
+    """
+    India market overview — reads ONLY from Redis.
+    Data is written by nse_worker.py running locally / on Indian VPS.
+    API never calls NSE directly → zero blocking risk in cloud.
+    """
+    cached = await CacheService.get(_KEY_INDIA_OVERVIEW)
     if cached:
         return cached
 
-    # DB fallback (never calls NSE directly on user request).
+    # Worker hasn't run yet or Redis is cold — return a clean warming-up state
+    # rather than hitting NSE (which would block in cloud).
+    logger.info("/api/markets/india: Redis cold — returning warming_up status")
+
     db = SessionLocal()
     try:
         latest_ts_subq = (
@@ -106,35 +122,64 @@ async def get_india_markets():
             db.query(StockPrice)
             .join(
                 latest_ts_subq,
-                (StockPrice.symbol == latest_ts_subq.c.symbol) & (StockPrice.timestamp == latest_ts_subq.c.mx),
+                (StockPrice.symbol == latest_ts_subq.c.symbol)
+                & (StockPrice.timestamp == latest_ts_subq.c.mx),
             )
             .filter(StockPrice.symbol.notlike("%.%"))
             .limit(1500)
             .all()
         )
-        heatmap = [
-            {
-                "symbol": r.symbol,
-                "price": float(r.price),
-                "pChange": 0.0,
-                "sector": "Unknown",
-                "marketCap": 0.0,
-                "volume": int(r.volume or 0),
+        if rows:
+            heatmap = [
+                {
+                    "symbol":         r.symbol,
+                    "price":          float(r.price),
+                    "pChange":        0.0,
+                    "change_percent": 0.0,
+                    "change":         0.0,
+                    "sector":         "Unknown",
+                    "marketCap":      0.0,
+                    "market_cap":     0.0,
+                    "volume":         int(r.volume or 0),
+                    "direction":      "up",
+                    "intensity":      "weak",
+                }
+                for r in rows
+            ]
+            return {
+                "as_of":              _now_iso(),
+                "source":             "db-fallback",
+                "status":             "stale",
+                "message":            "Live data unavailable — showing last known prices. Start nse_worker.py for live data.",
+                "nifty":              {"name": "NIFTY 50",   "value": 0.0, "change_percent": 0.0},
+                "banknifty":          {"name": "NIFTY BANK", "value": 0.0, "change_percent": 0.0},
+                "heatmap":            heatmap,
+                "nifty50":            heatmap,
+                "top_gainers":        [],
+                "top_losers":         [],
+                "sector_performance": [],
+                "indices":            [],
+                "constituent_count":  len(heatmap),
             }
-            for r in rows
-        ]
-        payload = {
-            "as_of": _now_iso(),
-            "source": "db-fallback",
-            "nifty": {"name": "NIFTY 500", "value": 0.0, "change_percent": 0.0},
-            "banknifty": {"name": "NIFTY BANK", "value": 0.0, "change_percent": 0.0},
-            "sector_performance": [],
-            "heatmap": heatmap,
-            "indices": [],
-        }
-        return payload
     finally:
         db.close()
+
+    # Absolutely cold — no Redis, no DB rows
+    return {
+        "as_of":              _now_iso(),
+        "source":             "warming_up",
+        "status":             "warming_up",
+        "message":            "Market data is initializing. Start nse_worker.py to populate live data.",
+        "nifty":              {"name": "NIFTY 50",   "value": 0.0, "change_percent": 0.0},
+        "banknifty":          {"name": "NIFTY BANK", "value": 0.0, "change_percent": 0.0},
+        "heatmap":            [],
+        "nifty50":            [],
+        "top_gainers":        [],
+        "top_losers":         [],
+        "sector_performance": [],
+        "indices":            [],
+        "constituent_count":  0,
+    }
 
 
 @router.get("/indices")
@@ -227,3 +272,94 @@ async def get_watchlist_quotes(_: str = Depends(require_user)):
             continue
         items.append(q)
     return {"items": items, "as_of": _now_iso(), "source": "market_data_service"}
+
+
+
+
+# ---------------------------------------------------------------------------
+# NSE endpoints — served from Redis only (populated by nse_worker.py)
+# ---------------------------------------------------------------------------
+
+@router.get("/nse/quote/{symbol}")
+async def nse_quote(
+    symbol: str,
+    _: str = Depends(require_user),
+):
+    """
+    NSE equity quote served from Redis.
+    Written by nse_worker.py — API never calls NSE directly.
+    """
+    sym = symbol.upper().strip()
+    # Try per-symbol key first (fast path written by worker)
+    cached = await CacheService.get(f"stock:price:{sym}")
+    if cached:
+        return cached
+    # Fall back to pulling from the full india overview payload
+    overview = await CacheService.get(_KEY_INDIA_OVERVIEW)
+    if overview:
+        for stock in overview.get("nifty50") or []:
+            if stock.get("symbol") == sym:
+                return {
+                    "symbol":         sym,
+                    "price":          stock["price"],
+                    "change":         stock.get("change", 0.0),
+                    "change_percent": stock["change_percent"],
+                    "volume":         stock.get("volume", 0),
+                    "source":         "nse_worker",
+                    "as_of":          overview.get("as_of"),
+                }
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "status":  "warming_up",
+            "message": f"No cached data for {sym}. Ensure nse_worker.py is running.",
+        },
+    )
+
+
+@router.get("/nse/nifty50")
+async def nse_nifty50(_: str = Depends(require_user)):
+    """NIFTY 50 constituent list — served from Redis (written by nse_worker.py)."""
+    cached = await CacheService.get(_KEY_NIFTY50)
+    if cached:
+        return {"constituents": cached, "as_of": _now_iso(), "source": "nse_worker"}
+    # Try extracting from full overview
+    overview = await CacheService.get(_KEY_INDIA_OVERVIEW)
+    if overview and overview.get("nifty50"):
+        return {
+            "constituents": overview["nifty50"],
+            "as_of":        overview.get("as_of", _now_iso()),
+            "source":       "nse_worker",
+        }
+    return {
+        "constituents": [],
+        "as_of":        _now_iso(),
+        "source":       "warming_up",
+        "message":      "Market data is initializing. Start nse_worker.py.",
+    }
+
+
+@router.get("/nse/indices")
+async def nse_indices(_: str = Depends(require_user)):
+    """All NSE indices — served from Redis (written by nse_worker.py)."""
+    cached = await CacheService.get(_KEY_ALL_INDICES)
+    if cached:
+        return {"indices": cached, "as_of": _now_iso(), "source": "nse_worker"}
+    overview = await CacheService.get(_KEY_INDIA_OVERVIEW)
+    if overview and overview.get("indices"):
+        return {
+            "indices": overview["indices"],
+            "as_of":   overview.get("as_of", _now_iso()),
+            "source":  "nse_worker",
+        }
+    return {
+        "indices": [],
+        "as_of":   _now_iso(),
+        "source":  "warming_up",
+        "message": "Market data is initializing. Start nse_worker.py.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# India market overview  — optimized for heatmap / dashboard widgets
+
