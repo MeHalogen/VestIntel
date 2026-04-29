@@ -21,6 +21,9 @@ from services.user_context import get_or_create_user_by_email
 from core.database import get_db
 from sqlalchemy.orm import Session
 from core.plans import PLAN_LIMITS
+import logging
+
+logger = logging.getLogger("vestintel.stocks")
 
 router = APIRouter()
 
@@ -165,7 +168,10 @@ async def _get_index_quote(symbol: str) -> dict | None:
 async def _get_nse_cached_quote(symbol: str):
     base = _normalize_symbol_for_cache(symbol)
     cached = await CacheService.get(f"stock:price:{base}")
-    if cached and (cached.get("exchange") == "NSE" or cached.get("source") == "nse"):
+    if cached and (
+        cached.get("exchange") == "NSE"
+        or cached.get("source") in ("nse", "nse_worker", "nse_db_fallback")
+    ):
         return cached
     return None
 
@@ -176,6 +182,41 @@ def _is_known_nse_symbol(symbol: str) -> bool:
         sym = _normalize_symbol_for_cache(symbol)
         row = db.query(Stock).filter(Stock.symbol == sym, Stock.exchange == "NSE").first()
         return row is not None
+    finally:
+        db.close()
+
+
+# Well-known NSE tickers that arrive as plain symbols (no .NS / .NSE suffix).
+_KNOWN_NSE_PLAIN = frozenset({
+    "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "WIPRO", "AXISBANK",
+    "SBIN", "KOTAKBANK", "BHARTIARTL", "LT", "HCLTECH", "BAJFINANCE",
+    "MARUTI", "TITAN", "SUNPHARMA", "ASIANPAINT", "NESTLEIND", "ULTRACEMCO",
+    "POWERGRID", "NTPC", "ONGC", "COALINDIA", "TATASTEEL", "HINDALCO",
+    "JSWSTEEL", "BAJAJFINSV", "ADANIPORTS", "TECHM", "DRREDDY",
+    "CIPLA", "EICHERMOT", "HEROMOTOCO", "DIVISLAB", "BRITANNIA",
+    "GRASIM", "INDUSINDBK", "BPCL", "IOC", "TATACONSUM",
+    "ETERNAL", "APOLLOHOSP", "TATAPOWER", "ADANIENT",
+})
+
+
+def _is_indian_plain_symbol(symbol: str) -> bool:
+    """Return True for plain (no-suffix) symbols that are definitely NSE-listed."""
+    sym = (symbol or "").upper().strip()
+    if "." in sym:
+        return False
+    return sym in _KNOWN_NSE_PLAIN or _is_known_nse_symbol(sym)
+
+
+def _persist_price(symbol: str, price: float, volume) -> None:
+    """Write a single price row to DB in a best-effort, non-blocking way."""
+    import time
+    db = SessionLocal()
+    try:
+        db.add(StockPrice(symbol=symbol, price=price, volume=volume, timestamp=int(time.time())))
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.debug("price persist failed for %s: %s", symbol, exc)
     finally:
         db.close()
 
@@ -191,7 +232,8 @@ async def quote(
     """
     cache_key = f"stock:price:{symbol.upper()}"
     cached = await CacheService.get(cache_key)
-    if cached:
+    # Only serve cache if it has a real price AND required schema fields
+    if cached and cached.get("price") and cached.get("exchange") and cached.get("timestamp"):
         return cached
 
     sym = symbol.upper().strip()
@@ -268,37 +310,69 @@ async def quote(
             # DB unavailable: continue to legacy provider path below.
             pass
 
-    # Routing: .NS / .NSE -> TwelveData, otherwise Finnhub (with fallback to TwelveData)
-    if sym.endswith(".NS") or sym.endswith(".NSE"):
-        td = TwelveDataProvider(settings.TWELVEDATA_API_KEY)
+    # --- Indian symbol routing: Redis-first (populated by nse_worker.py) ---
+    if sym.endswith(".NS") or sym.endswith(".NSE") or _is_indian_plain_symbol(sym):
+        base_sym = _normalize_symbol_for_cache(sym)
+        nse_cache_key = f"nse:quote:{base_sym}"
+
+        # 1. Per-symbol Redis key (written by nse_worker.py)
+        nse_cached_direct = await CacheService.get(nse_cache_key)
+        if nse_cached_direct:
+            return nse_cached_direct
+
+        # Also try the generic stock:price key which worker writes
+        worker_key = await CacheService.get(f"stock:price:{base_sym}")
+        if worker_key:
+            return worker_key
+
+        # 2. Extract from full nse:market payload written by worker
+        overview = await CacheService.get("nse:market")
+        if overview:
+            for stock in overview.get("nifty50") or []:
+                if stock.get("symbol") == base_sym:
+                    result = {
+                        "symbol":         base_sym,
+                        "exchange":       "NSE",
+                        "price":          float(stock["price"]),
+                        "change":         float(stock.get("change", 0.0)),
+                        "change_percent": float(stock["change_percent"]),
+                        "volume":         int(stock.get("volume", 0)),
+                        "timestamp":      _ts_now(),
+                        "source":         "nse_worker",
+                        "market_cap":     stock.get("market_cap"),
+                        "sector":         stock.get("sector"),
+                        "currency":       "INR",
+                    }
+                    await CacheService.set(cache_key, result, ttl=settings.PRICE_CACHE_TTL_SECONDS)
+                    return result
+
+        # 3. TwelveData fallback (works from any IP)
         try:
+            td = TwelveDataProvider(settings.TWELVEDATA_API_KEY)
             q = await td.fetch_quote(sym)
             normalized = {
-                "symbol": q.symbol,
-                "exchange": "NSE",
-                "price": float(q.price),
+                "symbol":         q.symbol,
+                "exchange":       "NSE",
+                "price":          float(q.price),
                 "change_percent": float(q.change_percent),
-                "volume": q.volume,
-                "timestamp": int(q.timestamp),
-                "source": "twelvedata",
-                "market_cap": None,
-                "sector": None,
+                "volume":         q.volume,
+                "timestamp":      int(q.timestamp),
+                "source":         "twelvedata_fallback",
+                "market_cap":     None,
+                "sector":         None,
+                "currency":       "INR",
             }
-        except Exception:
-            fallback = await market_data_service.get_quote(sym)
-            if not fallback:
-                raise HTTPException(status_code=502, detail="No quote source available for NSE symbol")
-            normalized = {
-                "symbol": fallback.get("symbol") or sym,
-                "exchange": fallback.get("exchange") or "NSE",
-                "price": float(fallback.get("price") or 0.0),
-                "change_percent": float(fallback.get("change_percent") or 0.0),
-                "volume": fallback.get("volume"),
-                "timestamp": _ts_now(),
-                "source": fallback.get("source") or "mock_fallback",
-                "market_cap": fallback.get("market_cap"),
-                "sector": fallback.get("sector"),
-            }
+            await CacheService.set(cache_key, normalized, ttl=60)
+            return normalized
+        except Exception as td_err:
+            logger.warning("TwelveData fallback failed for %s: %s", sym, td_err)
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "status":  "warming_up",
+                    "message": f"No live data for {sym}. Ensure nse_worker.py is running.",
+                },
+            )
     else:
         try:
             finnhub = FinnhubProvider(settings.FINNHUB_API_KEY)
@@ -347,23 +421,7 @@ async def quote(
                 }
 
     # Persist to DB (best-effort)
-    db = SessionLocal()
-    try:
-        db.add(
-            StockPrice(
-                symbol=normalized["symbol"],
-                price=float(normalized["price"]),
-                volume=normalized.get("volume"),
-                timestamp=int(normalized["timestamp"]),
-            )
-        )
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        # Don’t fail the request if DB write fails; cache + response still work.
-        print(f"quote db write failed: {e}")
-    finally:
-        db.close()
+    _persist_price(normalized["symbol"], float(normalized["price"]), normalized.get("volume"))
 
     await CacheService.set(cache_key, normalized, ttl=settings.PRICE_CACHE_TTL_SECONDS)
     return normalized
@@ -525,6 +583,37 @@ async def signals(_: str = Depends(require_user)):
 
         signal_type = "momentum_up" if chg > 0 else "momentum_down"
         severity = "high" if abs(chg) >= 2.0 else "medium"
+
+        # ── Explanation layer ──────────────────────────────────────────────────
+        reasons: list[str] = []
+        if chg > 4.0:
+            reasons.append("Exceptional upward move — rare single-session gain.")
+            reasons.append("Strong buying pressure across the session.")
+            reasons.append("Significantly above average daily change for NIFTY 50.")
+        elif chg > 2.0:
+            reasons.append("Strong upward price movement in the session.")
+            reasons.append("Above average daily change for NIFTY 50.")
+        elif chg > 0.75:
+            reasons.append("Moderate upward momentum observed.")
+            reasons.append("Positive price action, watch for continuation.")
+        elif chg < -4.0:
+            reasons.append("Sharp and severe decline — unusually large single-session loss.")
+            reasons.append("Heavy selling pressure, possible news catalyst.")
+            reasons.append("Well below the average daily range for NIFTY 50.")
+        elif chg < -2.0:
+            reasons.append("Sharp decline observed in the session.")
+            reasons.append("Selling pressure driving price below average range.")
+        else:  # chg < -0.75
+            reasons.append("Moderate downward pressure observed.")
+            reasons.append("Negative price action, monitor for reversal or continuation.")
+
+        sector = str(row.get("sector") or "Unknown")
+        volume = int(row.get("volume") or 0)
+        if volume > 0:
+            reasons.append(f"Session volume: {volume:,} shares traded.")
+        if sector not in ("Unknown", "Other"):
+            reasons.append(f"Sector: {sector}.")
+
         out.append(
             {
                 "id": f"sig_{sym}_{_ts_now()}",
@@ -532,6 +621,7 @@ async def signals(_: str = Depends(require_user)):
                 "type": signal_type,
                 "severity": severity,
                 "message": f"{sym} moved {chg:+.2f}% in latest session",
+                "reasons": reasons,
                 "timestamp": _ts_now(),
                 "source": "nse",
                 "as_of": (india or {}).get("as_of"),
@@ -543,19 +633,75 @@ async def signals(_: str = Depends(require_user)):
     return out
 
 @router.get("/{symbol}/quote", response_model=StockQuote)
-async def get_stock_quote(symbol: str, _: str = Depends(require_user)):
-    """Get real-time stock quote"""
-    cache_key = f"stock:price:{symbol.upper()}"
+async def get_stock_quote(
+    symbol: str,
+    _: str = Depends(require_user),
+):
+    """Get real-time stock quote — worker-cached for Indian symbols, provider for US/global."""
+    sym = symbol.upper().strip()
+    cache_key = f"stock:price:{sym}"
     cached = await CacheService.get(cache_key)
     if cached:
         return cached
-    
+
+    # Indian symbol: serve from Redis (written by nse_worker.py), TwelveData as fallback
+    if sym.endswith(".NS") or sym.endswith(".NSE") or _is_indian_plain_symbol(sym):
+        base_sym = _normalize_symbol_for_cache(sym)
+        # Check per-symbol key written by worker
+        worker_quote = await CacheService.get(f"stock:price:{base_sym}")
+        if worker_quote:
+            return worker_quote
+        # Check full market payload
+        overview = await CacheService.get("nse:market")
+        if overview:
+            for stock in overview.get("nifty50") or []:
+                if stock.get("symbol") == base_sym:
+                    result = {
+                        "symbol":         base_sym,
+                        "exchange":       "NSE",
+                        "price":          float(stock["price"]),
+                        "change":         float(stock.get("change", 0.0)),
+                        "change_percent": float(stock["change_percent"]),
+                        "volume":         int(stock.get("volume", 0)),
+                        "timestamp":      _ts_now(),
+                        "source":         "nse_worker",
+                        "market_cap":     stock.get("market_cap"),
+                        "sector":         stock.get("sector"),
+                        "currency":       "INR",
+                    }
+                    await CacheService.set(cache_key, result, ttl=settings.PRICE_CACHE_TTL_SECONDS)
+                    return result
+        # TwelveData as last resort for Indian symbols
+        try:
+            td = TwelveDataProvider(settings.TWELVEDATA_API_KEY)
+            q = await td.fetch_quote(sym)
+            result = {
+                "symbol":         q.symbol,
+                "exchange":       "NSE",
+                "price":          float(q.price),
+                "change_percent": float(q.change_percent),
+                "volume":         q.volume,
+                "timestamp":      int(q.timestamp),
+                "source":         "twelvedata_fallback",
+                "market_cap":     None,
+                "sector":         None,
+                "currency":       "INR",
+            }
+            await CacheService.set(cache_key, result, ttl=60)
+            return result
+        except Exception as exc:
+            logger.warning("All sources failed for %s: %s", sym, exc)
+            raise HTTPException(
+                status_code=503,
+                detail={"status": "warming_up", "message": f"No data for {sym}. Ensure nse_worker.py is running."},
+            )
+
     quote = await market_data_service.get_quote(symbol)
     if not quote:
         raise HTTPException(status_code=404, detail="Stock not found")
-    
-    normalized = {
-        "symbol": quote.get("symbol") or symbol.upper(),
+
+    result = {
+        "symbol": quote.get("symbol") or sym,
         "exchange": quote.get("exchange") or "US",
         "price": float(quote.get("price") or 0.0),
         "change_percent": float(quote.get("change_percent") or 0.0),
@@ -567,9 +713,8 @@ async def get_stock_quote(symbol: str, _: str = Depends(require_user)):
         "market_cap": quote.get("market_cap"),
         "sector": quote.get("sector"),
     }
-
-    await CacheService.set(cache_key, normalized, ttl=settings.PRICE_CACHE_TTL_SECONDS)
-    return normalized
+    await CacheService.set(cache_key, result, ttl=settings.PRICE_CACHE_TTL_SECONDS)
+    return result
 
 @router.get("/{symbol}/history", response_model=List[StockHistory])
 async def get_stock_history(symbol: str, period: str = "1M", _: str = Depends(require_user)):
