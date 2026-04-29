@@ -1,215 +1,325 @@
+"""
+NSE Heatmap Ingestion Worker
+============================
+Runs every 60 seconds.  Uses NSEClient (session-cookie-aware, retry-safe)
+to pull the full NIFTY 50 list + all-indices in a single asyncio gather.
+
+Redis output
+------------
+key : nse:heatmap           TTL : 120 s
+key : market:india:heatmap  TTL : 120 s  (legacy compat)
+key : stock:price:<SYM>     TTL :  60 s  (per-symbol fast-path)
+
+Payload shape
+-------------
+{
+  "as_of": "2026-04-29T10:30:00Z",
+  "source": "nse",
+  "heatmap": [
+    {
+      "symbol": "RELIANCE",
+      "name": "Reliance Industries Limited",
+      "price": 2450.5,
+      "change_percent": 1.2,
+      "pChange": 1.2,          # legacy alias
+      "volume": 1234567,
+      "market_cap": 0.0,
+      "marketCap": 0.0,        # legacy alias
+      "sector": "Energy",
+      "direction": "up" | "down",
+      "intensity": "extreme" | "strong" | "moderate" | "weak"
+    }, ...
+  ],
+  "top_gainers": [...],  # top 10 by change_percent
+  "top_losers": [...],   # worst 10 by change_percent
+  "sector_performance": [{"sector": ..., "performance": ..., "count": ...}],
+  "nifty": {"name": "NIFTY 50", "value": 23995.7, "change_percent": -0.4},
+  "banknifty": {"name": "NIFTY BANK", "value": 55400.0, "change_percent": -1.5},
+  "indices": [...]
+}
+"""
+
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Dict, List
-
-from sqlalchemy.orm import Session
+from typing import Any, Dict, List
 
 from core.cache import CacheService
 from core.database import SessionLocal
 from models.models import Stock, StockPrice
-from providers.nse import NSEProvider
+from providers.nse import NSEClient
+
+logger = logging.getLogger("vestintel.workers.nse")
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+HEATMAP_CACHE_KEY = "market:india:heatmap"   # legacy key (existing widgets)
+NSE_HEATMAP_KEY   = "nse:heatmap"            # new primary key
+INDIA_OVERVIEW_KEY = "nse:india_overview"    # key used by /api/markets/india
+
+CYCLE_SECONDS = 60   # how often to run
+CACHE_TTL     = 120  # Redis TTL for heatmap payloads
+QUOTE_TTL     = 60   # Redis TTL for per-symbol prices
 
 
-INDEXES = ["NIFTY 500", "NIFTY BANK", "NIFTY IT", "NIFTY PHARMA", "NIFTY AUTO"]
-HEATMAP_CACHE_KEY = "market:india:heatmap"
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-
-def _cache_key(symbol: str) -> str:
-    return f"stock:price:{symbol.upper()}"
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat() + "Z"
 
 
 def _now_ts() -> int:
     return int(time.time())
 
 
-def _normalize(rows: List[List[Dict]]) -> List[Dict]:
-    by_symbol: Dict[str, Dict] = {}
-    for dataset in rows:
-        for row in dataset:
-            sym = row["symbol"].upper().strip()
-            if not sym:
-                continue
-            if sym not in by_symbol:
-                by_symbol[sym] = row
-            else:
-                prev = by_symbol[sym]
-                # Prefer row with richer market cap/sector.
-                if (row.get("market_cap") or 0) > (prev.get("market_cap") or 0):
-                    by_symbol[sym] = row
-                elif not prev.get("sector") and row.get("sector"):
-                    prev["sector"] = row["sector"]
-            if not by_symbol[sym].get("sector"):
-                idx = (row.get("index_name") or "").upper()
-                if "BANK" in idx:
-                    by_symbol[sym]["sector"] = "Banking"
-                elif "IT" in idx:
-                    by_symbol[sym]["sector"] = "IT"
-                elif "PHARMA" in idx:
-                    by_symbol[sym]["sector"] = "Pharma"
-                elif "AUTO" in idx:
-                    by_symbol[sym]["sector"] = "Auto"
-                else:
-                    by_symbol[sym]["sector"] = "Unknown"
-    return list(by_symbol.values())
+def _heat(chg: float) -> str:
+    """Colour-intensity bucket for frontend treemap."""
+    a = abs(chg)
+    if a >= 4: return "extreme"
+    if a >= 2: return "strong"
+    if a >= 1: return "moderate"
+    return "weak"
+
+
+def _sector_from_name(name: str) -> str:
+    """Guess sector from company name when NSE doesn't supply one."""
+    n = (name or "").upper()
+    if any(x in n for x in ("BANK", "FINANCE", "FINANCIAL", "NBFC")):   return "Banking & Finance"
+    if any(x in n for x in ("TECH", "INFOSY", "WIPRO", "HCL", "TCS")):  return "IT"
+    if any(x in n for x in ("PHARMA", "LAB", "HEALTH", "CIPLA", "DR.REDDY")): return "Pharma"
+    if any(x in n for x in ("MOTOR", "AUTO", "MAHIND", "MARUTI", "HERO")): return "Auto"
+    if any(x in n for x in ("ENERGY", "OIL", "GAS", "PETRO", "RELIANCE")): return "Energy"
+    if any(x in n for x in ("CEMENT", "STEEL", "METAL", "JSPL", "TATA")): return "Materials"
+    if any(x in n for x in ("FMCG", "CONSUMER", "NESTLE", "HUL", "BRIT")): return "FMCG"
+    return "Unknown"
 
 
 def _compute_sector_performance(stocks: List[Dict]) -> List[Dict]:
-    bucket = defaultdict(list)
+    bucket: Dict[str, List[float]] = defaultdict(list)
     for s in stocks:
-        bucket[(s.get("sector") or "Unknown")].append(float(s.get("change_percent") or 0.0))
-    out = []
-    for sector, vals in bucket.items():
-        avg = sum(vals) / max(len(vals), 1)
-        out.append({"sector": sector, "performance": round(avg, 2), "count": len(vals)})
-    out.sort(key=lambda x: x["performance"], reverse=True)
-    return out
+        bucket[s.get("sector") or "Unknown"].append(float(s.get("change_percent") or 0.0))
+    return sorted(
+        [{"sector": k, "performance": round(sum(v) / len(v), 2), "count": len(v)} for k, v in bucket.items()],
+        key=lambda x: x["performance"],
+        reverse=True,
+    )
 
 
-def _compute_index_summary(stocks: List[Dict], name: str) -> Dict:
-    if not stocks:
-        return {"name": name, "value": 0.0, "change_percent": 0.0}
-    weighted_sum = 0.0
-    total_weight = 0.0
-    weighted_change = 0.0
-    for s in stocks:
-        cap = float(s.get("market_cap") or 0.0) or 1.0
-        weighted_sum += float(s.get("price") or 0.0) * cap
-        weighted_change += float(s.get("change_percent") or 0.0) * cap
-        total_weight += cap
-    return {
-        "name": name,
-        "value": round(weighted_sum / total_weight, 2),
-        "change_percent": round(weighted_change / total_weight, 2),
-    }
-
-
-async def ingest_once() -> Dict:
-    provider = NSEProvider()
-    try:
-        bundles = await asyncio.gather(*(provider.fetch_index_bundle(idx) for idx in INDEXES))
-    finally:
-        await provider.aclose()
-
-    fetched = [b.get("rows") or [] for b in bundles]
-    metas = [b.get("meta") or {} for b in bundles]
-    merged = _normalize(list(fetched))
+def _persist_to_db(stocks: List[Dict]) -> None:
+    """Write latest prices to Postgres (best-effort, never raises)."""
     ts = _now_ts()
-    now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
-    db: Session = SessionLocal()
+    db = SessionLocal()
     try:
-        for row in merged:
-            sym = row["symbol"]
-            stock = db.query(Stock).filter(Stock.symbol == sym).first()
-            if not stock:
-                db.add(Stock(symbol=sym, exchange="NSE", company_name=row.get("sector")))
-
-            db.add(
-                StockPrice(
-                    symbol=sym,
-                    price=float(row.get("price") or 0.0),
-                    volume=row.get("volume"),
-                    timestamp=ts,
-                )
-            )
+        for s in stocks:
+            sym = s["symbol"]
+            if not db.query(Stock).filter(Stock.symbol == sym).first():
+                db.add(Stock(symbol=sym, exchange="NSE", company_name=s.get("name") or s.get("sector")))
+            db.add(StockPrice(symbol=sym, price=float(s["price"]), volume=s.get("volume"), timestamp=ts))
         db.commit()
-    except Exception:
+    except Exception as exc:
         db.rollback()
-        raise
+        logger.warning("DB write failed: %s", exc)
     finally:
         db.close()
 
-    for row in merged:
-        sym = row["symbol"]
-        await CacheService.set(
-            _cache_key(sym),
-            {
-                "symbol": sym,
-                "exchange": "NSE",
-                "price": float(row.get("price") or 0.0),
-                "change_percent": float(row.get("change_percent") or 0.0),
-                "volume": int(row.get("volume") or 0),
-                "timestamp": ts,
-                "sector": row.get("sector"),
-                "market_cap": float(row.get("market_cap") or 0.0),
-                "source": "nse",
-                "as_of": now_iso,
-            },
-            ttl=60,
-        )
 
-    nifty500 = fetched[0] if len(fetched) > 0 else []
-    bank = fetched[1] if len(fetched) > 1 else []
-    nifty_summary = _compute_index_summary(nifty500, "NIFTY 500")
-    bank_summary = _compute_index_summary(bank, "NIFTY BANK")
-    # Prefer official NSE index-level values when present.
-    if metas:
-        if metas[0].get("value") is not None:
-            nifty_summary["value"] = float(metas[0]["value"])
-        if metas[0].get("change_percent") is not None:
-            nifty_summary["change_percent"] = float(metas[0]["change_percent"])
-    if len(metas) > 1:
-        if metas[1].get("value") is not None:
-            bank_summary["value"] = float(metas[1]["value"])
-        if metas[1].get("change_percent") is not None:
-            bank_summary["change_percent"] = float(metas[1]["change_percent"])
+# ---------------------------------------------------------------------------
+# Core ingestion logic
+# ---------------------------------------------------------------------------
 
-    payload = {
-        "as_of": now_iso,
-        "source": "nse",
-        "nifty": nifty_summary,
-        "banknifty": bank_summary,
-        "sector_performance": _compute_sector_performance(merged),
-        "heatmap": [
-            {
-                "symbol": s["symbol"],
-                "price": float(s.get("price") or 0.0),
-                "pChange": float(s.get("change_percent") or 0.0),
-                "sector": s.get("sector") or "Unknown",
-                "marketCap": float(s.get("market_cap") or 0.0),
-                "volume": int(s.get("volume") or 0),
-            }
-            for s in merged
-        ],
-        # Keep compatibility with existing frontend cards.
-        "indices": [
-            {
-                "symbol": "^NSEI",
-                "name": "NIFTY 500",
-                "region": "IN",
-                "value": nifty_summary["value"],
-                "change": 0.0,
-                "change_percent": nifty_summary["change_percent"],
-                "source": "nse",
-                "as_of": now_iso,
-            },
-            {
-                "symbol": "^NSEBANK",
-                "name": "NIFTY BANK",
-                "region": "IN",
-                "value": bank_summary["value"],
-                "change": 0.0,
-                "change_percent": bank_summary["change_percent"],
-                "source": "nse",
-                "as_of": now_iso,
-            },
-        ],
+async def ingest_once(client: NSEClient) -> Dict[str, Any]:
+    """
+    Fetch NIFTY 50 constituents + all-indices in parallel.
+    Returns the full heatmap payload dict.
+    Raises on unrecoverable failure (caller logs and continues the loop).
+    """
+    logger.info("NSE ingestion cycle starting")
+    t0 = time.monotonic()
+
+    # Two API calls in parallel: constituents list + index headlines
+    constituents_raw, all_indices_raw = await asyncio.gather(
+        client.get_nifty50(),
+        client.get_indices(),
+    )
+
+    now_iso = _now_iso()
+    ts      = _now_ts()
+
+    # --- Build enriched stock list ---
+    stocks: List[Dict[str, Any]] = []
+    for c in constituents_raw:
+        chg  = float(c.get("change_percent") or 0.0)
+        name = c.get("name") or c["symbol"]
+        sector = c.get("sector") or _sector_from_name(name)
+        stocks.append({
+            "symbol":         c["symbol"],
+            "name":           name,
+            "price":          float(c.get("price") or 0.0),
+            "change_percent": chg,
+            "pChange":        chg,                              # legacy alias
+            "volume":         int(c.get("volume") or 0),
+            "market_cap":     float(c.get("market_cap") or 0.0),
+            "marketCap":      float(c.get("market_cap") or 0.0),  # legacy alias
+            "sector":         sector,
+            "direction":      "up" if chg >= 0 else "down",
+            "intensity":      _heat(chg),
+            "as_of":          now_iso,
+        })
+
+    # Sort heatmap by market_cap desc for treemap rendering
+    stocks.sort(key=lambda x: x["market_cap"], reverse=True)
+
+    sorted_by_chg  = sorted(stocks, key=lambda x: x["change_percent"], reverse=True)
+    top_gainers    = sorted_by_chg[:10]
+    top_losers     = sorted_by_chg[-10:][::-1]
+
+    # --- Index summary ---
+    idx_map = {i["symbol"]: i for i in all_indices_raw}
+
+    def _idx_row(name: str) -> Dict[str, Any]:
+        row = idx_map.get(name, {})
+        return {
+            "name":           name,
+            "value":          float(row.get("price") or 0.0),
+            "change_percent": float(row.get("change_percent") or 0.0),
+            "advances":       int(row.get("advances") or 0),
+            "declines":       int(row.get("declines") or 0),
+        }
+
+    nifty_row    = _idx_row("NIFTY 50")
+    banknifty_row= _idx_row("NIFTY BANK")
+
+    indices_list = [
+        {
+            "symbol":         "^NSEI",
+            "name":           "NIFTY 50",
+            "region":         "IN",
+            "value":          nifty_row["value"],
+            "change":         0.0,
+            "change_percent": nifty_row["change_percent"],
+            "source":         "nse",
+            "as_of":          now_iso,
+        },
+        {
+            "symbol":         "^NSEBANK",
+            "name":           "NIFTY BANK",
+            "region":         "IN",
+            "value":          banknifty_row["value"],
+            "change":         0.0,
+            "change_percent": banknifty_row["change_percent"],
+            "source":         "nse",
+            "as_of":          now_iso,
+        },
+    ]
+
+    sector_perf = _compute_sector_performance(stocks)
+
+    payload: Dict[str, Any] = {
+        "as_of":              now_iso,
+        "source":             "nse",
+        "heatmap":            stocks,
+        "top_gainers":        top_gainers,
+        "top_losers":         top_losers,
+        "sector_performance": sector_perf,
+        "nifty":              {"name": "NIFTY 50",   **{k: nifty_row[k]     for k in ("value", "change_percent")}},
+        "banknifty":          {"name": "NIFTY BANK", **{k: banknifty_row[k] for k in ("value", "change_percent")}},
+        "indices":            indices_list,
+        # new fields used by /api/markets/india
+        "nifty50":            stocks,
+        "constituent_count":  len(stocks),
     }
 
-    await CacheService.set(HEATMAP_CACHE_KEY, payload, ttl=120)
+    # --- Persist ---
+    # Redis: heatmap (two keys for compat)
+    await asyncio.gather(
+        CacheService.set(NSE_HEATMAP_KEY,    payload, ttl=CACHE_TTL),
+        CacheService.set(HEATMAP_CACHE_KEY,  payload, ttl=CACHE_TTL),
+        CacheService.set(INDIA_OVERVIEW_KEY, payload, ttl=CACHE_TTL),
+    )
+
+    # Redis: per-symbol fast-path
+    for s in stocks:
+        await CacheService.set(
+            f"stock:price:{s['symbol']}",
+            {
+                "symbol":         s["symbol"],
+                "exchange":       "NSE",
+                "price":          s["price"],
+                "change_percent": s["change_percent"],
+                "volume":         s["volume"],
+                "market_cap":     s["market_cap"],
+                "sector":         s["sector"],
+                "source":         "nse_worker",
+                "timestamp":      ts,
+                "as_of":          now_iso,
+                "currency":       "INR",
+            },
+            ttl=QUOTE_TTL,
+        )
+        # Also write under the dotted key so .NS lookups hit cache
+        await CacheService.set(
+            f"stock:price:{s['symbol']}.NS",
+            {"symbol": s["symbol"], "exchange": "NSE", "price": s["price"],
+             "change_percent": s["change_percent"], "volume": s["volume"],
+             "source": "nse_worker", "timestamp": ts, "as_of": now_iso, "currency": "INR"},
+            ttl=QUOTE_TTL,
+        )
+
+    # Postgres (fire-and-forget thread — doesn't block the event loop)
+    import concurrent.futures
+    loop = asyncio.get_event_loop()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        await loop.run_in_executor(pool, _persist_to_db, stocks)
+
+    elapsed = time.monotonic() - t0
+    logger.info(
+        "NSE ingestion done in %.2fs — %d stocks | top gainer %s +%.2f%% | top loser %s %.2f%%",
+        elapsed,
+        len(stocks),
+        top_gainers[0]["symbol"] if top_gainers else "-",
+        top_gainers[0]["change_percent"] if top_gainers else 0.0,
+        top_losers[0]["symbol"] if top_losers else "-",
+        top_losers[0]["change_percent"] if top_losers else 0.0,
+    )
     return payload
 
 
+# ---------------------------------------------------------------------------
+# Long-running loop
+# ---------------------------------------------------------------------------
+
 async def run_forever() -> None:
+    """
+    Async loop that calls ingest_once() every CYCLE_SECONDS.
+    Never raises — all exceptions are caught and logged so the worker
+    stays alive across transient NSE 403s, network blips, DB outages, etc.
+    """
+    logger.info("NSE heatmap worker starting (interval=%ds)", CYCLE_SECONDS)
+    client = NSEClient()
+
+    # Warm session on startup so the first cycle is fast
+    try:
+        await client._warm_session()
+    except Exception as exc:
+        logger.warning("NSE session warm-up failed at startup: %s", exc)
+
     while True:
-        started = time.time()
+        cycle_start = time.monotonic()
         try:
-            await ingest_once()
-        except Exception as e:
-            print(f"[nse_ingestion] error: {e}")
-        elapsed = time.time() - started
-        await asyncio.sleep(max(0.0, 60.0 - elapsed))
+            await ingest_once(client)
+        except Exception as exc:
+            logger.error("NSE ingestion cycle failed: %s — will retry in %ds", exc, CYCLE_SECONDS)
+
+        elapsed  = time.monotonic() - cycle_start
+        sleep_for = max(0.0, CYCLE_SECONDS - elapsed)
+        logger.debug("NSE worker sleeping %.1fs", sleep_for)
+        await asyncio.sleep(sleep_for)
+

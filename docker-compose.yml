@@ -23,6 +23,19 @@ services:
       - db
       - redis
 
+  nse_worker:
+    build: ./backend
+    command: python workers/nse_worker.py
+    env_file:
+      - ./backend/.env
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - NSE_CYCLE_SECONDS=60
+      - NSE_CACHE_TTL=120
+    depends_on:
+      - redis
+    restart: unless-stopped   # auto-restart on crash or Docker daemon restart
+
   db:
     image: postgres:14-alpine
     environment:
@@ -38,7 +51,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "6380:6379"    # 6380 on host to avoid conflict with macOS local Redis
     volumes:
       - redis_data:/data
 
