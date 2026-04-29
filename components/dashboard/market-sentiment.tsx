@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Gauge, TrendingUp } from "lucide-react"
 import { MarketsAPI } from "@/lib/api"
+import { DataSourceBadge } from "@/components/ui/data-source-badge"
 
 export function MarketSentiment() {
   const { data } = useQuery({
@@ -71,6 +72,7 @@ export function MarketSentiment() {
             </div>
           </div>
         </div>
+        <DataSourceBadge source={data?.source} asOf={data?.as_of} className="mt-3 pt-2 border-t border-border/20" />
       </CardContent>
     </Card>
   )

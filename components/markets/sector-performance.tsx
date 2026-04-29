@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts"
 import { MarketsAPI } from "@/lib/api"
+import { DataSourceBadge } from "@/components/ui/data-source-badge"
 
 export function SectorPerformance() {
   const { data } = useQuery({
@@ -30,6 +31,7 @@ export function SectorPerformance() {
             <Bar dataKey="performance" fill="#4F8CFF" />
           </BarChart>
         </ResponsiveContainer>
+        <DataSourceBadge source={data?.source} asOf={data?.as_of} className="mt-2" />
       </CardContent>
     </Card>
   )

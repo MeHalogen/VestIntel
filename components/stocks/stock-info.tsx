@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { TrendingUp, TrendingDown } from "lucide-react"
 import { StocksAPI } from "@/lib/api"
 import { formatCurrency, formatNumber } from "@/lib/utils"
+import { DataSourceBadge } from "@/components/ui/data-source-badge"
 
 export function StockInfo({ symbol }: { symbol: string }) {
   const { data } = useQuery({
@@ -22,7 +23,15 @@ export function StockInfo({ symbol }: { symbol: string }) {
         <div className="flex items-start justify-between">
           <div>
             <h1 className="text-3xl font-bold mb-2">{symbol.toUpperCase()}</h1>
-            <p className="text-muted-foreground">{data?.sector || data?.exchange || "US"} market</p>
+            <p className="text-muted-foreground">
+              {data?.sector
+                ? `${data.sector} · ${data.exchange ?? "NSE"}`
+                : data?.exchange === "NSE" || data?.currency === "INR"
+                ? "NSE · India"
+                : data?.exchange
+                ? `${data.exchange} market`
+                : "NSE · India"}
+            </p>
           </div>
           <div className="text-right">
             <div className="text-4xl font-bold">{formatCurrency(price)}</div>
@@ -52,6 +61,7 @@ export function StockInfo({ symbol }: { symbol: string }) {
             <div className="text-lg font-semibold">-</div>
           </div>
         </div>
+        <DataSourceBadge source={data?.source} asOf={data?.as_of} className="mt-4 pt-3 border-t border-border/30" />
       </CardContent>
     </Card>
   )

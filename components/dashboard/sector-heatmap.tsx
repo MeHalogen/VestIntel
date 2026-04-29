@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Activity, Gauge } from "lucide-react"
 import { MarketsAPI } from "@/lib/api"
+import { DataSourceBadge } from "@/components/ui/data-source-badge"
 
 const COLOR_MAP: Record<string, string> = {
   Technology: "#22C55E",
@@ -57,6 +58,7 @@ export function SectorHeatmap() {
             </div>
           ))}
         </div>
+        <DataSourceBadge source={data?.source} asOf={data?.as_of} className="mt-3" />
       </CardContent>
     </Card>
   )
