@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/components/providers";
@@ -10,6 +10,14 @@ export const metadata: Metadata = {
   title: "VestIntel - Market Intelligence for the Modern Investor",
   description: "AI-powered stock intelligence platform that transforms raw market data into clear investment insights.",
   keywords: ["stock market", "financial analysis", "portfolio management", "AI insights", "market intelligence"],
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({

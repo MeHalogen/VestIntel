@@ -10,11 +10,13 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, HTTPException
 
 from api.deps.auth import require_user
-from api.deps.entitlements import get_user_and_plan, enforce_ai_quota
+from api.deps.entitlements import get_user_and_plan, enforce_ai_quota, require_feature, log_endpoint
 from core.cache import CacheService
-from core.plans import PlanType
+from core.plans import Feature, PlanType
 from schemas.schemas import AIInsight
 from services.ai_service import AIService
+from services.copilot_engine import handle_query as rule_engine_query
+from services.copilot_engine import generate_key_insights
 from services.market_data import MarketDataService
 
 logger = logging.getLogger("vestintel.insights")
@@ -66,7 +68,9 @@ def _now_iso() -> str:
 # ---------------------------------------------------------------------------
 
 @router.get("/{symbol}", response_model=AIInsight)
-async def get_ai_insights(symbol: str, _: str = Depends(require_user)):
+async def get_ai_insights(symbol: str, ctx=Depends(require_feature(Feature.ai_stock_analysis))):
+    user, plan = ctx
+    log_endpoint(user, plan, "insights.stock_analysis")
     sym = symbol.upper().strip()
     cache_key = _cache_key_insight(sym)
 
@@ -127,7 +131,9 @@ async def get_ai_insights(symbol: str, _: str = Depends(require_user)):
 # ---------------------------------------------------------------------------
 
 @router.get("/market/brief")
-async def get_market_brief(_: str = Depends(require_user)):
+async def get_market_brief(ctx=Depends(require_feature(Feature.ai_market_brief))):
+    user, plan = ctx
+    log_endpoint(user, plan, "insights.market_brief")
     cache_key = "ai:market_brief"
     cached = await CacheService.get(cache_key)
     if cached:
@@ -172,78 +178,80 @@ async def get_market_brief(_: str = Depends(require_user)):
 
 
 # ---------------------------------------------------------------------------
+# GET /api/insights/query/key-insights  (public — no auth required)
+# ---------------------------------------------------------------------------
+
+@router.get("/query/key-insights")
+async def get_key_insights():
+    """
+    Auto-generated pre-emptive insights for page-load display.
+    No user query needed. Cached 60s. No auth required.
+    """
+    cache_key = "ai:key_insights"
+    cached = await CacheService.get(cache_key)
+    if cached:
+        return cached
+
+    market_data: dict = await CacheService.get("nse:market") or {}
+    result = generate_key_insights(market_data)
+
+    payload = {
+        "insights": result.get("insights", []),
+        "as_of":    _now_iso(),
+        "source":   result.get("source", "nse_worker"),
+    }
+
+    try:
+        await CacheService.set(cache_key, payload, ttl=60)
+    except Exception as exc:
+        logger.warning("key_insights cache write failed: %s", exc)
+
+    return payload
+
+
+# ---------------------------------------------------------------------------
 # GET /api/insights/query/ask?q=
 # ---------------------------------------------------------------------------
 
 @router.get("/query/ask")
 async def ask_copilot(
     q: str = Query(..., min_length=3),
-    ctx=Depends(get_user_and_plan),
+    ctx=Depends(require_feature(Feature.ai_copilot)),
 ):
     user, plan = ctx
-    if plan == PlanType.free:
-        raise HTTPException(
-            status_code=403,
-            detail="This feature is available in VestIntel Pro.",
-        )
-
+    log_endpoint(user, plan, "insights.copilot")
     await enforce_ai_quota(user.id, plan)
 
-    # --- Cache read (keyed on normalised query text) ---
+    # --- Cache (keyed on normalised query) ---
     cache_key = _cache_key_copilot(q)
     cached = await CacheService.get(cache_key)
     if cached:
-        logger.debug("copilot cache hit for query: %s", q[:60])
+        logger.debug("copilot cache hit: %s", q[:60])
         return cached
 
-    # --- Extract mentioned symbols & fetch live quotes ---
-    symbols = _extract_symbols(q)
-    context_quotes: dict = {}
-    data_points: List[dict] = []
+    # --- Load NSE market data from Redis (written by nse_worker) ---
+    market_data: dict = await CacheService.get("nse:market") or {}
 
-    for sym in symbols[:5]:
-        try:
-            quote = await market_data_service.get_quote(sym)
-        except Exception:
-            quote = None
-        if not quote:
-            continue
-        price = float(quote.get("price") or 0.0)
-        chg   = float(quote.get("change_percent") or 0.0)
-        vol   = quote.get("volume")
-        context_quotes[sym] = {
-            "price":          price,
-            "change_percent": chg,
-            "volume":         vol,
-            "source":         quote.get("source"),
-        }
-        data_points.append({
-            "label": sym,
-            "value": f"₹{price:.2f} ({chg:+.2f}%)",
-        })
-
-    # --- Call AIService.copilot_query() ---
-    result = await ai_service.copilot_query(
-        q,
-        context_data={
-            "query":         q,
-            "quotes":        context_quotes,
-            "symbols_found": symbols,
-        },
-    )
+    # --- Rule-based engine — deterministic, <5ms, no external calls ---
+    result = rule_engine_query(q, market_data)
 
     payload = {
         "query":          q,
         "answer":         result.get("answer", ""),
-        "data_points":    result.get("data_points") or data_points,
-        "related_stocks": result.get("related_stocks") or symbols[:5],
+        "confidence":     result.get("confidence", "LOW"),
+        "context":        result.get("context", []),
+        "suggestions":    result.get("suggestions", []),
+        "breadth":               result.get("breadth", {}),
+        "relative_performance":  result.get("relative_performance", None),
+        "data_points":    result.get("data_points", []),
+        "related_stocks": result.get("related_stocks", []),
         "as_of":          _now_iso(),
-        "source":         result.get("source", "derived"),
+        "source":         result.get("source", "rule_engine"),
     }
 
-    # --- Cache write ---
+    # Cache for 60s — data is live, no need to hold longer
     try:
-        await CacheService.set(cache_key, payload, ttl=AI_COPILOT_TTL)
+        await CacheService.set(cache_key, payload, ttl=60)
     except Exception as exc:
         logger.warning("copilot cache write failed: %s", exc)
 

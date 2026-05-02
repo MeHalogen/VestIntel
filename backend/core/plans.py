@@ -50,59 +50,45 @@ class PlanLimits:
 
 
 PLAN_LIMITS: Dict[PlanType, PlanLimits] = {
+    # MVP: generous free limits — gather usage data, don't block users.
     PlanType.free: PlanLimits(
-        watchlist_symbols=10,
-        portfolios=1,
-        ai_queries_per_day=5,
-        market_data_delay_seconds=300,
+        watchlist_symbols=None,          # unlimited for MVP
+        portfolios=None,                 # unlimited for MVP
+        ai_queries_per_day=100,          # high limit; lower when monetizing
+        market_data_delay_seconds=0,     # real-time for MVP
     ),
     PlanType.pro: PlanLimits(
         watchlist_symbols=None,
         portfolios=None,
-        ai_queries_per_day=50,
+        ai_queries_per_day=200,
         market_data_delay_seconds=0,
     ),
     PlanType.pro_plus: PlanLimits(
         watchlist_symbols=None,
         portfolios=None,
-        ai_queries_per_day=None,
+        ai_queries_per_day=None,         # unlimited
         market_data_delay_seconds=0,
     ),
 }
 
 
+# ---------------------------------------------------------------------------
+# MVP PHASE: All features enabled for ALL plans.
+# To gate a feature in future, move it out of PlanType.free set only.
+# Example: remove Feature.ai_copilot from free → free users see upgrade wall.
+# Zero code changes elsewhere needed.
+# ---------------------------------------------------------------------------
+_ALL_FEATURES: Set[Feature] = set(Feature)
+
 PLAN_FEATURES: Dict[PlanType, Set[Feature]] = {
-    PlanType.free: {
-        Feature.market_data_delayed,
-        Feature.charts_basic,
-        Feature.market_heatmap,
-        Feature.sectors_dashboard,
-        Feature.news_feed,
-        Feature.signals_basic,
-        Feature.stock_search_basic,
-        Feature.ai_market_brief,
-    },
-    PlanType.pro: {
-        # everything in free, plus
-        Feature.market_data_delayed,  # delay=0 if pro
-        Feature.charts_basic,
-        Feature.market_heatmap,
-        Feature.sectors_dashboard,
-        Feature.news_feed,
-        Feature.signals_basic,
-        Feature.stock_search_basic,
-        Feature.ai_market_brief,
-        Feature.ai_stock_analysis,
-        Feature.ai_copilot,
-        Feature.news_sentiment,
-        Feature.advanced_indicators,
-        Feature.custom_alerts,
-        Feature.momentum_screener,
-    },
-    PlanType.pro_plus: {
-        # everything
-        *set(Feature),
-    },
+    # MVP: free users get everything — keeps launch simple, usage data accumulates.
+    PlanType.free: _ALL_FEATURES,
+
+    # Pro: same as free for now; differentiated by limits (quota, delay).
+    PlanType.pro: _ALL_FEATURES,
+
+    # Pro+: full access, no limits.
+    PlanType.pro_plus: _ALL_FEATURES,
 }
 
 

@@ -169,9 +169,30 @@ export type AIInsight = {
   source?: string
 }
 
+export type CopilotBreadth = {
+  advancing: number
+  declining: number
+  unchanged: number
+  total: number
+  adv_pct: number
+  sentiment: "bullish" | "bearish" | "neutral"
+}
+
+export type CopilotRelativePerformance = {
+  relative_performance: "outperforming" | "underperforming"
+  delta: number
+  stock_change: number
+  nifty_change: number
+}
+
 export type CopilotResponse = {
   query: string
   answer: string
+  confidence: "HIGH" | "MEDIUM" | "LOW"
+  context: string[]
+  suggestions: string[]
+  breadth: CopilotBreadth
+  relative_performance: CopilotRelativePerformance | null
   data_points: Array<{ label: string; value: string }>
   related_stocks: string[]
   as_of: string
@@ -252,6 +273,8 @@ export const InsightsAPI = {
       "/api/insights/market/brief"
     ),
   ask: (q: string) => apiRequest<CopilotResponse>(`/api/insights/query/ask?q=${encodeURIComponent(q)}`),
+  keyInsights: () =>
+    apiRequest<{ insights: string[]; as_of: string; source: string }>("/api/insights/query/key-insights"),
 }
 
 export const BillingAPI = {
