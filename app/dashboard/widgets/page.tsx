@@ -28,7 +28,7 @@ export default function WidgetsPage() {
       </div>
 
       {/* Stats Bar */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div className="p-4 rounded-lg bg-gradient-to-br from-bullish/10 to-bullish/5 border border-bullish/30">
           <div className="text-sm text-muted-foreground mb-1">Active Signals</div>
           <div className="text-3xl font-bold text-bullish">24</div>
@@ -48,7 +48,7 @@ export default function WidgetsPage() {
       </div>
 
       {/* Grid Layout */}
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Row 1: Market Heatmap (full width) */}
         <MarketHeatmapWidget />
 
@@ -78,7 +78,7 @@ export default function WidgetsPage() {
           <TrendingUp className="w-6 h-6 text-primary" />
           <h3 className="text-xl font-bold">Why These Widgets Work</h3>
         </div>
-        <div className="grid grid-cols-3 gap-4 text-sm">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
           <div>
             <div className="font-semibold mb-2">📊 Data Density</div>
             <p className="text-muted-foreground">

@@ -12,7 +12,7 @@ export default function StockPage({ params }: { params: { symbol: string } }) {
       
       <StockInfo symbol={decodedSymbol} />
       
-      <div className="grid gap-6 lg:grid-cols-3">
+      <div className="grid gap-6 grid-cols-1 lg:grid-cols-3">
         <div className="lg:col-span-2 space-y-6">
           <StockChart symbol={decodedSymbol} />
           <StockMetrics symbol={decodedSymbol} />

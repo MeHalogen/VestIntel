@@ -12,7 +12,7 @@ from models.models import Alert
 from schemas.schemas import AlertCreate
 from services.market_data import MarketDataService
 from services.user_context import get_or_create_user_by_email
-from api.deps.entitlements import get_user_and_plan
+from api.deps.entitlements import get_user_and_plan, require_feature, log_endpoint
 from core.plans import Feature
 
 router = APIRouter()
@@ -48,11 +48,7 @@ async def create_alert(
     ctx = Depends(get_user_and_plan),
 ):
     user, plan = ctx
-    if plan.value == "free":
-        raise HTTPException(
-            status_code=403,
-            detail="This feature is available in VestIntel Pro.",
-        )
+    log_endpoint(user, plan, "alerts.create")
     db_item = Alert(
         user_id=user.id,
         symbol=alert.symbol.upper().strip(),

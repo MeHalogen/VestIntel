@@ -89,3 +89,16 @@
 .animate-ticker {
   animation: ticker 30s linear infinite;
 }
+
+/* Mobile touch improvements */
+@layer base {
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  button, a, [role="button"] {
+    touch-action: manipulation;
+  }
+}

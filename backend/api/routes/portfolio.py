@@ -12,7 +12,7 @@ from models.models import Portfolio, PortfolioHolding
 from schemas.schemas import HoldingCreate, PortfolioCreate
 from services.market_data import MarketDataService
 from services.user_context import get_or_create_user_by_email
-from api.deps.entitlements import get_user_and_plan
+from api.deps.entitlements import get_user_and_plan, require_feature, log_endpoint
 from core.plans import PLAN_LIMITS
 
 router = APIRouter()
@@ -33,9 +33,10 @@ def _get_portfolio_or_404(db: Session, user_id: int, portfolio_id: int) -> Portf
 @router.get("/")
 async def get_portfolios(
     db: Session = Depends(get_db),
-    user_email: str = Depends(require_user),
+    ctx = Depends(get_user_and_plan),
 ):
-    user = get_or_create_user_by_email(db, user_email)
+    user, plan = ctx
+    log_endpoint(user, plan, "portfolio.list")
     portfolios = db.query(Portfolio).filter(Portfolio.user_id == user.id).all()
 
     out = []
