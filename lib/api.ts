@@ -211,9 +211,9 @@ export const MarketsAPI = {
 }
 
 export const PortfolioAPI = {
-  list: () => apiRequest<Portfolio[]>("/api/portfolio/"),
+  list: () => apiRequest<Portfolio[]>("/api/portfolio"),
   create: (name: string, description?: string) =>
-    apiRequest<{ id: number; name: string }>("/api/portfolio/", {
+    apiRequest<{ id: number; name: string }>("/api/portfolio", {
       method: "POST",
       body: JSON.stringify({ name, description }),
     }),
@@ -232,9 +232,9 @@ export const PortfolioAPI = {
 }
 
 export const AlertsAPI = {
-  list: () => apiRequest<AlertItem[]>("/api/alerts/"),
+  list: () => apiRequest<AlertItem[]>("/api/alerts"),
   create: (payload: { symbol: string; alert_type: string; condition: string; value: number }) =>
-    apiRequest("/api/alerts/", {
+    apiRequest("/api/alerts", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
@@ -343,7 +343,7 @@ export type MarketPulse = {
 }
 
 export const PulseAPI = {
-  get: () => apiRequest<MarketPulse>("/api/pulse/"),
+  get: () => apiRequest<MarketPulse>("/api/pulse"),
 }
 
 // ─── Opportunity Finder ───────────────────────────────────────────────────────
@@ -372,6 +372,6 @@ export type OpportunityReport = {
 export const OpportunityAPI = {
   get: (types?: OpportunityType[]) => {
     const qs = types?.length ? `?types=${types.join("&types=")}` : ""
-    return apiRequest<OpportunityReport>(`/api/opportunities/${qs}`)
+    return apiRequest<OpportunityReport>(`/api/opportunities${qs}`)
   },
 }

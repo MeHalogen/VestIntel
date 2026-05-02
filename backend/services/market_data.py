@@ -187,57 +187,6 @@ class MockProvider:
         return [u for u in universe if q in u["symbol"] or q in u["name"].upper()]
 
 
-class FinnhubProvider:
-    name = "finnhub"
-
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-
-    async def fetch_quote(self, symbol: NormalizedSymbol) -> Quote:
-        if not self.api_key:
-            raise ProviderError("FINNHUB_API_KEY not configured")
-
-        # Finnhub doesn't support NSE/BSE without special coverage; we keep US-only here.
-        if symbol.exchange != Exchange.US:
-            raise ProviderError(f"finnhub unsupported exchange: {symbol.exchange}")
-
-        url = "https://finnhub.io/api/v1/quote"
-        params = {"symbol": symbol.base, "token": self.api_key}
-        timeout = httpx.Timeout(5.0, connect=2.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            r = await client.get(url, params=params)
-            r.raise_for_status()
-            data = r.json()
-
-        # Finnhub can return zeroed payloads for unsupported symbols/coverage.
-        # Treat this as provider failure so fallback adapters can take over.
-        c = float(data.get("c") or 0.0)
-        d = float(data.get("d") or 0.0)
-        dp = float(data.get("dp") or 0.0)
-        if c <= 0.0 and d == 0.0 and dp == 0.0:
-            raise ProviderError(f"finnhub returned empty quote for {symbol.base}")
-        # Finnhub: c=current, d=change, dp=percent, t=timestamp
-        as_of = _now_iso()
-        if isinstance(data.get("t"), (int, float)) and data.get("t"):
-            as_of = datetime.utcfromtimestamp(data["t"]).replace(microsecond=0).isoformat() + "Z"
-        return Quote(
-            symbol=symbol.base,
-            exchange=symbol.exchange.value,
-            price=c,
-            change=d,
-            change_percent=dp,
-            currency="USD",
-            as_of=as_of,
-            source=self.name,
-        )
-
-    async def fetch_history(self, symbol: NormalizedSymbol, period: str) -> List[Bar]:
-        raise ProviderError("finnhub history not implemented")
-
-    async def search(self, query: str) -> List[Dict[str, str]]:
-        raise ProviderError("finnhub search not implemented")
-
-
 class MarketDataService:
     """Fetch → normalize → cache → fail over across providers.
 
@@ -249,8 +198,6 @@ class MarketDataService:
 
     def __init__(self):
         adapters: List[ProviderAdapter] = []
-        if settings.FINNHUB_API_KEY:
-            adapters.append(FinnhubProvider(settings.FINNHUB_API_KEY))
         self.adapters = adapters
 
         # Fine-grained TTLs (seconds)

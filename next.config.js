@@ -6,10 +6,13 @@ const nextConfig = {
   },
   async rewrites() {
     return [
-      {
-        source: '/api/:path*',
-        destination: 'http://localhost:8000/:path*',
-      },
+      // Routes where FastAPI requires a trailing slash - handle server-side to avoid CORS redirects
+      { source: '/api/pulse', destination: 'http://localhost:8000/api/pulse/' },
+      { source: '/api/portfolio', destination: 'http://localhost:8000/api/portfolio/' },
+      { source: '/api/alerts', destination: 'http://localhost:8000/api/alerts/' },
+      { source: '/api/opportunities', destination: 'http://localhost:8000/api/opportunities/' },
+      // General proxy for all other /api/* routes
+      { source: '/api/:path*', destination: 'http://localhost:8000/api/:path*' },
     ]
   },
 }

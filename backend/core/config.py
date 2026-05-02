@@ -13,16 +13,16 @@ class Settings(BaseSettings):
     
     # API Keys
     ALPHA_VANTAGE_API_KEY: str = ""
-    FINNHUB_API_KEY: str = ""
     TWELVEDATA_API_KEY: str = ""
     NEWS_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
 
     # Market data ingestion
-    # Predefined watchlist to keep warm in cache & store in DB
+    # Predefined watchlist to keep warm in cache & store in DB (NSE stocks only)
     INGEST_WATCHLIST: str = (
-    "AAPL,NVDA,MSFT,MCO,TSLA,AMZN,META,GOOGL,"
-    "RELIANCE.NSE,TCS.NSE,INFY.NSE,HDFCBANK.NSE,ITC.NSE"
+        "RELIANCE.NSE,TCS.NSE,HDFCBANK.NSE,INFY.NSE,ICICIBANK.NSE,"
+        "HINDUNILVR.NSE,SBIN.NSE,BAJFINANCE.NSE,BHARTIARTL.NSE,KOTAKBANK.NSE,"
+        "LT.NSE,AXISBANK.NSE,MARUTI.NSE,SUNPHARMA.NSE,TITAN.NSE"
     )
 
     # Keep workers OFF by default for safety in tests/CI; enable in .env for local runtime.

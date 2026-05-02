@@ -4,7 +4,7 @@ export type ApiRequestOptions = RequestInit & {
   userEmail?: string
 }
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || ""
 const DEV_USER_EMAIL = process.env.NEXT_PUBLIC_DEV_USER_EMAIL || "demo@vestintel.local"
 
 export function getApiUserEmail(override?: string): string {

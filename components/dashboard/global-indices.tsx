@@ -41,7 +41,7 @@ export function GlobalIndicesMonitor() {
               </div>
               
               <div className="text-right">
-                <div className="font-semibold">{index.value.toLocaleString()}</div>
+                <div className="font-semibold">{index.value != null ? index.value.toLocaleString() : "—"}</div>
                 <div className={`text-xs flex items-center gap-1 ${
                   index.change >= 0 ? "text-bullish" : "text-bearish"
                 }`}>

@@ -11,7 +11,6 @@ from api.deps.auth import require_user
 from api.deps.entitlements import get_user_and_plan, enforce_ai_quota
 from core.plans import PlanType
 from providers.news import NewsProvider
-from providers.finnhub import FinnhubProvider
 from providers.twelvedata import TwelveDataProvider
 from core.database import SessionLocal
 from models.models import Stock, StockPrice
@@ -374,57 +373,11 @@ async def quote(
                 },
             )
     else:
-        try:
-            finnhub = FinnhubProvider(settings.FINNHUB_API_KEY)
-            q = await finnhub.fetch_quote(sym)
-            normalized = {
-                "symbol": q.symbol,
-                "exchange": "US",
-                "price": float(q.price),
-                "change_percent": float(q.change_percent),
-                "volume": q.volume,
-                "timestamp": int(q.timestamp),
-                "source": "finnhub",
-                "market_cap": None,
-                "sector": None,
-            }
-        except Exception as e:
-            # Fallback: Finnhub request fails -> TwelveData
-            try:
-                td = TwelveDataProvider(settings.TWELVEDATA_API_KEY)
-                q = await td.fetch_quote(sym)
-                normalized = {
-                    "symbol": q.symbol,
-                    "exchange": "US",
-                    "price": float(q.price),
-                    "change_percent": float(q.change_percent),
-                    "volume": q.volume,
-                    "timestamp": int(q.timestamp),
-                    "source": f"twelvedata_fallback:{type(e).__name__}",
-                    "market_cap": None,
-                    "sector": None,
-                }
-            except Exception:
-                fallback = await market_data_service.get_quote(sym)
-                if not fallback:
-                    raise HTTPException(status_code=502, detail="No quote source available")
-                normalized = {
-                    "symbol": fallback.get("symbol") or sym,
-                    "exchange": fallback.get("exchange") or "US",
-                    "price": float(fallback.get("price") or 0.0),
-                    "change_percent": float(fallback.get("change_percent") or 0.0),
-                    "volume": fallback.get("volume"),
-                    "timestamp": _ts_now(),
-                    "source": fallback.get("source") or f"service_fallback:{type(e).__name__}",
-                    "market_cap": fallback.get("market_cap"),
-                    "sector": fallback.get("sector"),
-                }
-
-    # Persist to DB (best-effort)
-    _persist_price(normalized["symbol"], float(normalized["price"]), normalized.get("volume"))
-
-    await CacheService.set(cache_key, normalized, ttl=settings.PRICE_CACHE_TTL_SECONDS)
-    return normalized
+        # Non-NSE symbols: not supported — VestIntel is India-only
+        raise HTTPException(
+            status_code=400,
+            detail={"status": "unsupported", "message": f"{sym} is not an NSE-listed symbol."},
+        )
 
 
 @router.get("/history", response_model=List[StockHistory])

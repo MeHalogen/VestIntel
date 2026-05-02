@@ -259,19 +259,30 @@ async def get_market_sentiment():
 
 @router.get("/watchlist")
 async def get_watchlist_quotes(_: str = Depends(require_user)):
-    """Returns quotes for the configured ingest watchlist.
-
-    This keeps the UI free of hardcoded/mock symbols.
-    """
+    """Returns quotes for the top NSE stocks from the NSE worker Redis data."""
+    cache = CacheService()
     items = []
-    symbols = [s.strip().upper() for s in (settings.INGEST_WATCHLIST or "").split(",") if s.strip()]
-    symbols = symbols[:25]
-    for sym in symbols:
-        q = await market_data_service.get_quote(sym)
-        if not q:
-            continue
-        items.append(q)
-    return {"items": items, "as_of": _now_iso(), "source": "market_data_service"}
+
+    # Pull from nse:nifty50 Redis data (written by nse_worker.py)
+    nifty50_raw = await cache.get(_KEY_NIFTY50)
+    if nifty50_raw:
+        import json
+        stocks = json.loads(nifty50_raw) if isinstance(nifty50_raw, str) else nifty50_raw
+        # Show top 10 by volume as watchlist
+        sorted_stocks = sorted(stocks, key=lambda x: x.get("volume", 0), reverse=True)[:10]
+        for s in sorted_stocks:
+            items.append({
+                "symbol": s.get("symbol"),
+                "exchange": "NSE",
+                "price": s.get("price"),
+                "change": s.get("change"),
+                "change_percent": s.get("change_percent", s.get("pChange")),
+                "currency": "INR",
+                "source": "nse_worker",
+                "as_of": _now_iso(),
+            })
+
+    return {"items": items, "as_of": _now_iso(), "source": "nse_worker"}
 
 
 

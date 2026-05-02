@@ -10,7 +10,6 @@ from core.cache import CacheService
 from core.config import settings
 from core.database import SessionLocal
 from models.models import StockPrice
-from providers.finnhub import FinnhubProvider
 from providers.twelvedata import TwelveDataProvider
 
 
@@ -24,44 +23,18 @@ def _cache_key(symbol: str) -> str:
 
 
 async def _fetch_quote(symbol: str) -> dict:
-    # Routing rule
-    if symbol.endswith(".NS") or symbol.endswith(".NSE"):
-        p = TwelveDataProvider(settings.TWELVEDATA_API_KEY)
-        q = await p.fetch_quote(symbol)
-        return {
-            "symbol": q.symbol,
-            "exchange": "NSE",
-            "price": q.price,
-            "change_percent": q.change_percent,
-            "volume": q.volume,
-            "timestamp": q.timestamp,
-            "source": "twelvedata",
-        }
-
-    try:
-        p = FinnhubProvider(settings.FINNHUB_API_KEY)
-        q = await p.fetch_quote(symbol)
-        return {
-            "symbol": q.symbol,
-            "exchange": "US",
-            "price": q.price,
-            "change_percent": q.change_percent,
-            "volume": q.volume,
-            "timestamp": q.timestamp,
-            "source": "finnhub",
-        }
-    except Exception as e:
-        td = TwelveDataProvider(settings.TWELVEDATA_API_KEY)
-        q = await td.fetch_quote(symbol)
-        return {
-            "symbol": q.symbol,
-            "exchange": "US",
-            "price": q.price,
-            "change_percent": q.change_percent,
-            "volume": q.volume,
-            "timestamp": q.timestamp,
-            "source": f"twelvedata_fallback:{type(e).__name__}",
-        }
+    # VestIntel is India-only — all symbols go through TwelveData (NSE)
+    p = TwelveDataProvider(settings.TWELVEDATA_API_KEY)
+    q = await p.fetch_quote(symbol)
+    return {
+        "symbol": q.symbol,
+        "exchange": "NSE",
+        "price": q.price,
+        "change_percent": q.change_percent,
+        "volume": q.volume,
+        "timestamp": q.timestamp,
+        "source": "twelvedata",
+    }
 
 
 async def ingest_once(symbols: Optional[Iterable[str]] = None) -> None:
