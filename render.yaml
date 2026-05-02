@@ -1,0 +1,59 @@
+databases:
+  - name: vestintel-db
+    databaseName: vestintel
+    user: vestintel
+    plan: free
+
+services:
+  # ── Redis ────────────────────────────────────────────────────────────────
+  - type: redis
+    name: vestintel-redis
+    plan: free
+    maxmemoryPolicy: noeviction
+
+  # ── FastAPI Backend ───────────────────────────────────────────────────────
+  - type: web
+    name: vestintel-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: vestintel-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: vestintel-redis
+          type: redis
+          property: connectionString
+      - key: TWELVEDATA_API_KEY
+        sync: false          # set manually in Render dashboard
+      - key: NEWS_API_KEY
+        sync: false          # set manually in Render dashboard
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ENVIRONMENT
+        value: production
+
+  # ── NSE Worker ────────────────────────────────────────────────────────────
+  - type: worker
+    name: vestintel-nse-worker
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: python workers/nse_worker.py
+    plan: free
+    envVars:
+      - key: REDIS_URL
+        fromService:
+          name: vestintel-redis
+          type: redis
+          property: connectionString
+      - key: NSE_CYCLE_SECONDS
+        value: "60"
+      - key: NSE_CACHE_TTL
+        value: "120"
+      - key: ENVIRONMENT
+        value: production

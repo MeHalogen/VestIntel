@@ -1,0 +1,12 @@
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# Set BACKEND_URL in Netlify dashboard → Site settings → Environment variables
+# e.g. BACKEND_URL = "https://your-backend.railway.app"
