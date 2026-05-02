@@ -1,18 +1,17 @@
 /** @type {import('next').NextConfig} */
+const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8000'
+
 const nextConfig = {
-  output: 'standalone',
   images: {
     domains: ['localhost'],
   },
   async rewrites() {
     return [
-      // Routes where FastAPI requires a trailing slash - handle server-side to avoid CORS redirects
-      { source: '/api/pulse', destination: 'http://localhost:8000/api/pulse/' },
-      { source: '/api/portfolio', destination: 'http://localhost:8000/api/portfolio/' },
-      { source: '/api/alerts', destination: 'http://localhost:8000/api/alerts/' },
-      { source: '/api/opportunities', destination: 'http://localhost:8000/api/opportunities/' },
-      // General proxy for all other /api/* routes
-      { source: '/api/:path*', destination: 'http://localhost:8000/api/:path*' },
+      { source: '/api/pulse',         destination: `${BACKEND_URL}/api/pulse/` },
+      { source: '/api/portfolio',     destination: `${BACKEND_URL}/api/portfolio/` },
+      { source: '/api/alerts',        destination: `${BACKEND_URL}/api/alerts/` },
+      { source: '/api/opportunities', destination: `${BACKEND_URL}/api/opportunities/` },
+      { source: '/api/:path*',        destination: `${BACKEND_URL}/api/:path*` },
     ]
   },
 }
