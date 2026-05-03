@@ -1,7 +1,7 @@
 "use client"
 
 import { useQuery } from "@tanstack/react-query"
-import { TrendingUp, TrendingDown, Minus } from "lucide-react"
+import { TrendingUp, TrendingDown, Minus, RefreshCw } from "lucide-react"
 import { PulseAPI } from "@/lib/api"
 
 const DIR_COLOR: Record<string, string> = {
@@ -17,11 +17,16 @@ const DIR_ICON = {
 }
 
 export function MarketHeadline() {
-  const { data: pulse, isLoading } = useQuery({
+  const { data: pulse, isLoading, isFetching, refetch, dataUpdatedAt } = useQuery({
     queryKey: ["pulse", "headline"],
     queryFn: PulseAPI.get,
     refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
   })
+
+  const updatedTime = dataUpdatedAt
+    ? new Date(dataUpdatedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+    : null
 
   // While loading, show static scaffold
   if (isLoading || !pulse) {
@@ -37,10 +42,8 @@ export function MarketHeadline() {
   const Icon = DIR_ICON[dir] ?? Minus
   const color = DIR_COLOR[dir] ?? "text-muted-foreground"
 
-  // Build a tight headline from the narrative's first sentence
   const firstSentence = pulse.narrative?.split(/(?<=[.!?])\s/)[0] ?? pulse.summary
 
-  // Supporting context: strongest sector up, weakest down
   const strongest = pulse.strongest_sector
   const weakest = pulse.weakest_sector
   let context = ""
@@ -54,28 +57,38 @@ export function MarketHeadline() {
     context = `${strongest.sector} leads (+${strongest.performance.toFixed(1)}%)`
   }
 
-  // Breadth mini-label
   const { advancing, declining, total } = pulse.breadth
-  const breadthLabel = total > 0
-    ? `${advancing} of ${total} stocks advancing`
-    : ""
+  const breadthLabel = total > 0 ? `${advancing} of ${total} stocks advancing` : ""
 
   return (
     <div className="space-y-1">
-      <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3">
-        Dashboard
-        <span className={`flex items-center gap-1.5 text-xl font-semibold ${color}`}>
-          <Icon className="w-5 h-5" />
-          {dir.charAt(0).toUpperCase() + dir.slice(1)}
-        </span>
-      </h1>
+      <div className="flex items-center gap-3 flex-wrap">
+        <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3">
+          Dashboard
+          <span className={`flex items-center gap-1.5 text-xl font-semibold ${color}`}>
+            <Icon className="w-5 h-5" />
+            {dir.charAt(0).toUpperCase() + dir.slice(1)}
+          </span>
+        </h1>
 
-      {/* Live first sentence of narrative */}
+        {/* Refresh button */}
+        <button
+          onClick={() => refetch()}
+          disabled={isFetching}
+          className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 ml-auto"
+          title="Refresh market data"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? "animate-spin" : ""}`} />
+          <span className="hidden sm:inline">
+            {isFetching ? "Refreshing…" : updatedTime ? `Updated: ${updatedTime}` : "Refresh"}
+          </span>
+        </button>
+      </div>
+
       <p className="text-base text-foreground/80 leading-relaxed max-w-3xl">
         {firstSentence}
       </p>
 
-      {/* Context pills */}
       {(context || breadthLabel) && (
         <div className="flex items-center gap-3 pt-0.5 flex-wrap">
           {context && (
@@ -99,3 +112,4 @@ export function MarketHeadline() {
     </div>
   )
 }
+
