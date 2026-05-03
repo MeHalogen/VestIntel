@@ -9,6 +9,7 @@ from core.config import settings
 from core.database import engine
 from models.models import Base
 from workers.news_ingestion import run_forever as run_news_ingestion
+from workers.nse_worker import run_worker as run_nse_worker
 import asyncio
 
 app = FastAPI(
@@ -42,9 +43,11 @@ app.include_router(opportunities.router, prefix="/api/opportunities", tags=["opp
 async def startup_event():
     # Create all DB tables (idempotent — safe to run on every start).
     Base.metadata.create_all(bind=engine)
-    # Background news ingestion worker (doesn't touch NSE).
     if not settings.DISABLE_WORKERS:
+        # Background news ingestion worker (doesn't touch NSE).
         asyncio.create_task(run_news_ingestion())
+        # NSE market data worker — runs inside the web process on Render free plan.
+        asyncio.create_task(run_nse_worker())
 
 
 @app.on_event("shutdown")
