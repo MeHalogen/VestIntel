@@ -1,8 +1,9 @@
 "use client"
 
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { TrendingUp, TrendingDown, Minus, RefreshCw } from "lucide-react"
 import { PulseAPI } from "@/lib/api"
+import { useState } from "react"
 
 const DIR_COLOR: Record<string, string> = {
   bullish: "text-bullish",
@@ -17,14 +18,28 @@ const DIR_ICON = {
 }
 
 export function MarketHeadline() {
-  const { data: pulse, isLoading, isFetching, refetch, dataUpdatedAt } = useQuery({
+  const queryClient = useQueryClient()
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null)
+
+  const { data: pulse, isLoading, dataUpdatedAt } = useQuery({
     queryKey: ["pulse", "headline"],
     queryFn: PulseAPI.get,
     refetchInterval: 60_000,
     refetchOnWindowFocus: true,
   })
 
-  const updatedTime = dataUpdatedAt
+  // Refresh ALL dashboard queries simultaneously
+  const handleRefresh = async () => {
+    setIsRefreshing(true)
+    await queryClient.invalidateQueries()
+    setLastRefreshed(new Date())
+    setIsRefreshing(false)
+  }
+
+  const displayTime = lastRefreshed
+    ? lastRefreshed.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+    : dataUpdatedAt
     ? new Date(dataUpdatedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
     : null
 
@@ -73,14 +88,14 @@ export function MarketHeadline() {
 
         {/* Refresh button */}
         <button
-          onClick={() => refetch()}
-          disabled={isFetching}
+          onClick={handleRefresh}
+          disabled={isRefreshing}
           className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 ml-auto"
-          title="Refresh market data"
+          title="Refresh all market data"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? "animate-spin" : ""}`} />
+          <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
           <span className="hidden sm:inline">
-            {isFetching ? "Refreshing…" : updatedTime ? `Updated: ${updatedTime}` : "Refresh"}
+            {isRefreshing ? "Refreshing…" : displayTime ? `Updated: ${displayTime}` : "Refresh"}
           </span>
         </button>
       </div>
