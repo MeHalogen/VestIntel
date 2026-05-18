@@ -50,7 +50,18 @@ VestIntel is a premium full-stack SaaS application that transforms raw financial
 - **Finnhub** - Real-time quotes and news
 - **Yahoo Finance** - Historical data
 
-## 📦 Installation
+## � MVP Launch Mode
+
+**VestIntel is currently in MVP mode** - all features are accessible without authentication or subscriptions!
+
+This makes it perfect for:
+- ✅ User testing and feedback collection
+- ✅ Demonstrating full functionality
+- ✅ Beta launches with unrestricted access
+
+To switch between MVP mode and Production mode (with authentication & subscriptions), see [FEATURE_FLAGS.md](./FEATURE_FLAGS.md).
+
+## �📦 Installation
 
 ### Prerequisites
 - Node.js 18+ and npm/yarn

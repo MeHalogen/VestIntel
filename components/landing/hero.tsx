@@ -4,8 +4,12 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { TrendingUp, ArrowRight } from "lucide-react"
 import { motion } from "framer-motion"
+import { FEATURE_FLAGS } from "@/lib/feature-flags"
 
 export function Hero() {
+  // Adjust CTA text based on whether auth is enabled
+  const ctaText = FEATURE_FLAGS.enableAuth ? "Start Free Analysis" : "Launch Dashboard"
+  
   return (
     <section className="relative min-h-screen flex items-center justify-center overflow-hidden">
       {/* Animated background */}
@@ -70,7 +74,7 @@ export function Hero() {
           >
             <Button asChild size="lg" className="text-base">
               <Link href="/dashboard">
-                Start Free Analysis
+                {ctaText}
                 <ArrowRight className="ml-2 w-5 h-5" />
               </Link>
             </Button>

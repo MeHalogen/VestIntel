@@ -22,11 +22,14 @@ export function MarketHeadline() {
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null)
 
-  const { data: pulse, isLoading, dataUpdatedAt } = useQuery({
+  const { data: pulse, isLoading, dataUpdatedAt, error } = useQuery({
     queryKey: ["pulse", "headline"],
     queryFn: PulseAPI.get,
     refetchInterval: 60_000,
     refetchOnWindowFocus: true,
+    retry: 1,
+    staleTime: 30_000, // Data is fresh for 30 seconds
+    gcTime: 5 * 60 * 1000, // Keep in cache for 5 minutes
   })
 
   // Refresh ALL dashboard queries simultaneously
@@ -43,12 +46,39 @@ export function MarketHeadline() {
     ? new Date(dataUpdatedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
     : null
 
-  // While loading, show static scaffold
-  if (isLoading || !pulse) {
+  // Show error state with fallback content
+  if (error && !pulse) {
     return (
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
-        <p className="text-muted-foreground animate-pulse">Loading today's market story…</p>
+        <p className="text-muted-foreground">
+          Welcome back! Market data is loading...
+        </p>
+      </div>
+    )
+  }
+
+  // Show loading state only briefly, then show static content
+  if (isLoading && !pulse) {
+    return (
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
+        <p className="text-muted-foreground">
+          <span className="inline-flex items-center gap-2">
+            <RefreshCw className="w-4 h-4 animate-spin" />
+            Loading market overview...
+          </span>
+        </p>
+      </div>
+    )
+  }
+
+  // Ensure pulse data exists
+  if (!pulse) {
+    return (
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
+        <p className="text-muted-foreground">Market data unavailable</p>
       </div>
     )
   }

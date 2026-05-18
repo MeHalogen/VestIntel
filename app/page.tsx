@@ -4,6 +4,7 @@ import { DashboardPreview } from "@/components/landing/dashboard-preview";
 import { AIInsightsPreview } from "@/components/landing/ai-insights-preview";
 import { PricingSection } from "@/components/landing/pricing-section";
 import { Footer } from "@/components/landing/footer";
+import { FEATURE_FLAGS } from "@/lib/feature-flags";
 
 export default function Home() {
   return (
@@ -12,7 +13,7 @@ export default function Home() {
       <MarketTicker />
       <DashboardPreview />
       <AIInsightsPreview />
-      <PricingSection />
+      {FEATURE_FLAGS.showPricing && <PricingSection />}
       <Footer />
     </main>
   );

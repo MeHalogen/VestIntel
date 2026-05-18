@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Bell, User, Settings, Menu } from "lucide-react"
 import { CommandBar } from "./command-bar"
 import { useMobileMenu } from "./mobile-menu-context"
+import { FEATURE_FLAGS } from "@/lib/feature-flags"
 
 export function TopBar() {
   const { toggle } = useMobileMenu()
@@ -30,9 +31,11 @@ export function TopBar() {
         <Button variant="ghost" size="icon" className="hidden sm:inline-flex">
           <Settings className="w-5 h-5" />
         </Button>
-        <Button variant="ghost" size="icon">
-          <User className="w-5 h-5" />
-        </Button>
+        {FEATURE_FLAGS.showUserMenu && (
+          <Button variant="ghost" size="icon">
+            <User className="w-5 h-5" />
+          </Button>
+        )}
       </div>
     </header>
   )

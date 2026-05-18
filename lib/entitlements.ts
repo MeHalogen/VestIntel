@@ -9,6 +9,8 @@
  *   Zero other code changes needed.
  */
 
+import { FEATURE_FLAGS } from "./feature-flags"
+
 export type Plan = "free" | "pro" | "pro_plus"
 
 export type Feature =
@@ -85,12 +87,22 @@ const PLAN_FEATURES: Record<Plan, Record<Feature, boolean>> = {
 
 /** Returns true if the given plan can access the feature. */
 export function canUse(plan: Plan | null | undefined, feature: Feature): boolean {
+  // If subscriptions are disabled (MVP mode), all features are accessible
+  if (!FEATURE_FLAGS.enableSubscriptions) {
+    return true
+  }
+  
   const p = (plan || "free") as Plan
   return PLAN_FEATURES[p]?.[feature] ?? false
 }
 
 /** Human-readable upgrade message for a gated feature. */
 export function upgradeMessage(feature: Feature): string {
+  // In MVP mode, no upgrade messages needed
+  if (!FEATURE_FLAGS.enableUpgradePrompts) {
+    return ""
+  }
+  
   const messages: Partial<Record<Feature, string>> = {
     ai_copilot:         "AI Copilot is part of VestIntel Pro.",
     ai_stock_analysis:  "AI Stock Analysis is part of VestIntel Pro.",

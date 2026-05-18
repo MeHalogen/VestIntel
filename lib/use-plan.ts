@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query"
 import { BillingAPI } from "@/lib/api"
 import type { Plan } from "@/lib/entitlements"
+import { FEATURE_FLAGS } from "./feature-flags"
 
 export type { Plan }
 
@@ -18,6 +19,11 @@ export function usePlan() {
   const q = useQuery({
     queryKey: ["billing", "me"],
     queryFn: async () => {
+      // If subscriptions are disabled, skip API call
+      if (!FEATURE_FLAGS.enableSubscriptions) {
+        return { plan: "free" as Plan }
+      }
+      
       try {
         return await BillingAPI.me()
       } catch {
@@ -28,6 +34,7 @@ export function usePlan() {
     staleTime: 60_000,
     refetchInterval: 120_000,
     retry: false, // don't hammer the backend on auth failures
+    enabled: FEATURE_FLAGS.enableSubscriptions, // Don't fetch if subscriptions disabled
   })
 
   return {
